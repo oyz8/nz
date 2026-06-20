@@ -1,4 +1,4 @@
-name: 同步上游动态库
+name: ♻️ 同步上游动态库
 
 on:
   schedule:
