@@ -1,0 +1,139 @@
+name: 同步上游动态库
+
+on:
+  schedule:
+    - cron: '0 2 * * *'          # 每天 UTC 2:00
+  workflow_dispatch:
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+        lib: [sbx, bot, agent, v1]
+      fail-fast: false
+    steps:
+      - name: 下载 ${{ matrix.lib }}-${{ matrix.arch }}.so 并生成 SHA256
+        id: dl
+        run: |
+          FILENAME="${{ matrix.lib }}-${{ matrix.arch }}.so"
+          URL="https://${{ matrix.arch }}.31888.xyz/${{ matrix.lib }}.so"
+          echo "Downloading $URL"
+          curl -fSL --retry 3 --retry-delay 5 -o "$FILENAME" "$URL"
+          SHA=$(sha256sum "$FILENAME" | awk '{print $1}')
+          echo "sha256=$SHA" >> $GITHUB_OUTPUT
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+
+          # 生成 .sha256 文件（用于后续汇总）
+          echo "$SHA" > "${FILENAME}.sha256"
+
+      - name: 上传 .so 文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: so-${{ matrix.lib }}-${{ matrix.arch }}
+          path: ${{ steps.dl.outputs.filename }}
+
+      - name: 上传 SHA256 文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha-${{ matrix.lib }}-${{ matrix.arch }}
+          path: ${{ steps.dl.outputs.filename }}.sha256
+
+  publish:
+    needs: download
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 整理文件
+        run: |
+          mkdir -p libs sha-files
+          find artifacts -name '*.so' -exec mv {} libs/ \;
+          find artifacts -name '*.sha256' -exec mv {} sha-files/ \;
+
+      - name: 生成当前哈希字典 current_sha.json
+        run: |
+          echo '{}' > current_sha.json
+          for sha_file in sha-files/*.sha256; do
+            fname=$(basename "$sha_file" .sha256)
+            hash=$(cat "$sha_file")
+            jq --arg name "$fname" --arg hash "$hash" \
+              '.[$name] = $hash' current_sha.json > tmp && mv tmp current_sha.json
+          done
+          echo "当前哈希："
+          cat current_sha.json
+
+      - name: 读取旧 Release 哈希（若存在）
+        id: old_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view so-files-latest --json body --jq '.body' > release_body.md 2>/dev/null; then
+            # 提取 JSON 代码块（```json ... ```）
+            sed -n '/```json/,/```/p' release_body.md | sed '1d;$d' > prev_sha.json
+            if [ ! -s prev_sha.json ]; then
+              echo '{}' > prev_sha.json
+            fi
+            echo "RELEASE_EXISTS=true" >> $GITHUB_OUTPUT
+          else
+            echo '{}' > prev_sha.json
+            echo "RELEASE_EXISTS=false" >> $GITHUB_OUTPUT
+          fi
+          echo "旧哈希："
+          cat prev_sha.json
+
+      - name: 判断是否需要更新
+        id: compare
+        run: |
+          # 比较两个 JSON 是否相同（忽略键顺序，但 jq 的 == 会考虑顺序，所以用 --argjson 传递对象比较）
+          DIFF=$(jq -n --slurpfile cur current_sha.json --slurpfile prev prev_sha.json \
+            '$cur[0] == $prev[0] | not')
+          if [ "$DIFF" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "文件发生变化，准备更新 Release"
+            # 记录变化详情（可选）
+            jq -n --slurpfile cur current_sha.json --slurpfile prev prev_sha.json \
+              '{added: ($cur[0] | keys) - ($prev[0] | keys),
+               removed: ($prev[0] | keys) - ($cur[0] | keys),
+               changed: ($cur[0] | to_entries | map(select(.value != $prev[0][.key]))) }'
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "所有文件与上次 Release 一致，跳过发布"
+          fi
+
+      - name: 生成 Release body
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          cat > release-body.md <<EOF
+          动态库集合（自动同步）
+
+          上游变动时自动更新此 Release，每日检查。
+
+          \`\`\`json
+          $(cat current_sha.json)
+          \`\`\`
+          EOF
+
+      - name: 发布/更新 Release
+        if: steps.compare.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: so-files-latest
+          name: "动态库集合"
+          body_path: release-body.md
+          files: libs/*
+          make_latest: true
+          overwrite: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 无变化提示
+        if: steps.compare.outputs.changed != 'true'
+        run: echo "✅ 本次检查无更新，无需发布新 Release"
