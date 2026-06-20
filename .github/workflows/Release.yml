@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        # 新增 freebsd 平台
+        arch: [amd64, arm64, freebsd]
         lib: [sbx, bot, agent, v1]
       fail-fast: false
     steps:
@@ -18,11 +19,27 @@ jobs:
         id: dl
         run: |
           FILENAME="${{ matrix.lib }}-${{ matrix.arch }}.so"
-          URL="https://${{ matrix.arch }}.31888.xyz/${{ matrix.lib }}.so"
-          echo "Downloading $URL"
+
+          # ── 按平台选择上游 URL ──────────────────────────────────────
+          case "${{ matrix.arch }}" in
+            amd64)
+              URL="https://amd64.31888.xyz/${{ matrix.lib }}.so"
+              ;;
+            arm64)
+              URL="https://arm64.31888.xyz/${{ matrix.lib }}.so"
+              ;;
+            freebsd)
+              # FreeBSD 专用上游
+              URL="https://00.ssss.nyc.mn/freebsd-${{ matrix.lib }}.so"
+              ;;
+          esac
+
+          echo "Downloading $URL → $FILENAME"
           curl -fSL --retry 3 --retry-delay 5 -o "$FILENAME" "$URL"
+
           SHA=$(sha256sum "$FILENAME" | awk '{print $1}')
-          echo "sha256=$SHA" >> $GITHUB_OUTPUT
+          echo "sha256=$SHA"
+          echo "sha256=$SHA"    >> $GITHUB_OUTPUT
           echo "filename=$FILENAME" >> $GITHUB_OUTPUT
           echo "$SHA" > "${FILENAME}.sha256"
 
@@ -53,8 +70,12 @@ jobs:
       - name: 整理文件
         run: |
           mkdir -p libs sha-files
-          find artifacts -name '*.so' -exec mv {} libs/ \;
+          find artifacts -name '*.so'     -exec mv {} libs/ \;
           find artifacts -name '*.sha256' -exec mv {} sha-files/ \;
+          echo "=== 已收集的库文件 ==="
+          ls -lh libs/
+          echo "=== SHA256 文件 ==="
+          ls sha-files/
 
       - name: 生成当前哈希字典 current_sha.json
         run: |
@@ -63,57 +84,94 @@ jobs:
             fname=$(basename "$sha_file" .sha256)
             hash=$(cat "$sha_file")
             jq --arg name "$fname" --arg hash "$hash" \
-              '.[$name] = $hash' current_sha.json > tmp && mv tmp current_sha.json
+              '.[$name] = $hash' current_sha.json > tmp.json \
+              && mv tmp.json current_sha.json
           done
-          echo "当前哈希："
+          # 按 key 排序，保证比较时顺序一致
+          jq -S '.' current_sha.json > sorted.json && mv sorted.json current_sha.json
+          echo "=== 当前哈希 ==="
           cat current_sha.json
 
+      # ── BUG 修复核心：改用 gh release download 获取已发布的 JSON 文件 ──
       - name: 读取旧 Release 哈希（若存在）
         id: old_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view so-files-latest --json body --jq '.body' > release_body.md 2>/dev/null; then
-            sed -n '/```json/,/```/p' release_body.md | sed '1d;$d' > prev_sha.json
-            if [ ! -s prev_sha.json ]; then
-              echo '{}' > prev_sha.json
-            fi
+          mkdir -p prev_assets
+
+          # 优先尝试下载我们专门上传的 sha256_index.json 文件
+          # 比从 Markdown body 解析可靠得多
+          if gh release download so-files-latest \
+               --pattern "sha256_index.json" \
+               --dir prev_assets \
+               --clobber 2>/dev/null; then
+
+            # 同样排序后再比较
+            jq -S '.' prev_assets/sha256_index.json > prev_sha.json 2>/dev/null \
+              || echo '{}' > prev_sha.json
+
             echo "RELEASE_EXISTS=true" >> $GITHUB_OUTPUT
+            echo "=== 旧哈希（来自 sha256_index.json）==="
+            cat prev_sha.json
+
           else
+            # 首次发布 / Release 不存在
             echo '{}' > prev_sha.json
             echo "RELEASE_EXISTS=false" >> $GITHUB_OUTPUT
+            echo "未找到已有 Release，将执行首次发布"
           fi
-          echo "旧哈希："
-          cat prev_sha.json
 
       - name: 判断是否需要更新
         id: compare
         run: |
-          # 直接用 jq 比较两个 JSON 对象是否完全相等
-          DIFF=$(jq -n --slurpfile cur current_sha.json --slurpfile prev prev_sha.json '$cur[0] == $prev[0] | not')
-          if [ "$DIFF" = "true" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "📦 文件发生变化，将更新 Release"
-            # 简单地输出文件名列表（不执行可能出错的 jq 高级操作）
-            echo "当前文件列表："
-            jq -r 'keys[]' current_sha.json
-          else
+          # jq 比较两个已排序的 JSON 对象
+          SAME=$(jq -n \
+            --slurpfile cur  current_sha.json \
+            --slurpfile prev prev_sha.json \
+            '$cur[0] == $prev[0]')
+
+          if [ "$SAME" = "true" ]; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "✅ 所有文件与上次 Release 一致，跳过发布"
+            echo "✅ 所有文件与上次 Release 完全一致，跳过发布"
+          else
+            echo "changed=true"  >> $GITHUB_OUTPUT
+            echo "📦 检测到文件变化，将更新 Release"
+            echo "--- 变动详情 ---"
+            # 打印新增/变更的条目
+            jq -n \
+              --slurpfile cur  current_sha.json \
+              --slurpfile prev prev_sha.json \
+              '($cur[0] | to_entries) | map(
+                  select(.value != ($prev[0][.key] // ""))
+                ) | from_entries'
           fi
 
       - name: 生成 Release body
         if: steps.compare.outputs.changed == 'true'
         run: |
-          cat > release-body.md <<EOF
-          动态库集合（自动同步）
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+          cat > release-body.md << 'BODYEOF'
+          ## 动态库集合（自动同步）
 
-          上游变动时自动更新此 Release，每日检查。
+          上游变动时自动更新，每日 UTC 02:00 检查。
 
-          \`\`\`json
-          $(cat current_sha.json)
-          \`\`\`
-          EOF
+          | 平台 | 上游地址 |
+          |------|---------|
+          | amd64 | `https://amd64.31888.xyz/` |
+          | arm64 | `https://arm64.31888.xyz/` |
+          | freebsd | `https://00.ssss.nyc.mn/freebsd-*.so` |
+
+          BODYEOF
+          echo "更新时间：$TIMESTAMP" >> release-body.md
+
+      # 将 sha256_index.json 也打包进 Release assets，下次直接下载比较
+      - name: 准备发布产物
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          cp current_sha.json libs/sha256_index.json
+          echo "=== 最终发布文件列表 ==="
+          ls -lh libs/
 
       - name: 发布/更新 Release
         if: steps.compare.outputs.changed == 'true'
@@ -132,7 +190,7 @@ jobs:
         if: steps.compare.outputs.changed != 'true'
         run: echo "本次检查无更新，无需发布新 Release"
 
-      - name: 清理运行记录
+      - name: 清理旧工作流运行记录
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ github.token }}
