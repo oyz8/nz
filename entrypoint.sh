@@ -109,7 +109,7 @@ else
 fi
 
 # =========================
-# 步骤 3: 启动 cron (Debian 下为 cron)
+# 步骤 3: 启动 cron
 # =========================
 log_info "启动 cron 服务"
 cron
@@ -149,7 +149,7 @@ EOF
 fi
 
 # =========================
-# 步骤 3.6: 提升系统限制 + 面板高并发参数 (关键优化)
+# 步骤 3.6: 提升系统限制 + 面板高并发参数
 # =========================
 echo "=========================================="
 echo " 步骤 3.6: 优化系统限制 & 面板参数"
@@ -168,13 +168,13 @@ if [ -f /dashboard/data/config.yaml ]; then
 fi
 
 # =========================
-# 步骤 4: 启动面板（丢弃日志）
+# 步骤 4: 启动面板
 # =========================
 echo "=========================================="
 echo " 步骤 4: 启动面板"
 echo "=========================================="
 
-./app >/dev/null 2>&1 &
+./app > /dev/null 2>&1 &
 APP_PID=$!
 log_info "面板已启动 (PID: $APP_PID)"
 
@@ -209,14 +209,14 @@ else
 fi
 
 # =========================
-# 步骤 6: 启动 cloudflared（动态库，丢弃日志）
+# 步骤 6: 启动 cloudflared（动态库方式）
 # =========================
 if [ -n "$ARGO_AUTH" ]; then
     echo "=========================================="
     echo " 步骤 6: 启动 cloudflared (动态库)"
     echo "=========================================="
     
-    python3 /start_cloudflared.py >/dev/null 2>&1 &
+    python3 /start_cloudflared.py > /dev/null 2>&1 &
     sleep 5
     
     if pgrep -f "python3 /start_cloudflared.py" >/dev/null; then
@@ -229,55 +229,11 @@ else
 fi
 
 # =========================
-# 步骤 7: 下载探针
-# =========================
-echo "=========================================="
-echo " 步骤 7: 下载探针"
-echo "=========================================="
-
-arch=$(uname -m)
-case $arch in
-    x86_64)  fileagent="nezha-agent_linux_amd64.zip" ;;
-    aarch64) fileagent="nezha-agent_linux_arm64.zip" ;;
-    s390x)   fileagent="nezha-agent_linux_s390x.zip" ;;
-    *)
-        log_error "不支持的架构: $arch"
-        exit 1
-        ;;
-esac
-
-if [ -z "$DASHBOARD_VERSION" ] || [ "$DASHBOARD_VERSION" = "latest" ]; then
-    DASHBOARD_VERSION=$(curl -s https://api.github.com/repos/nezhahq/agent/releases/latest \
-        | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
-    if [ -z "$DASHBOARD_VERSION" ]; then
-        log_error "获取最新版本失败"
-        exit 1
-    fi
-    log_info "使用最新版本: $DASHBOARD_VERSION"
-else
-    log_info "使用指定版本: $DASHBOARD_VERSION"
-fi
-
-URL="https://github.com/nezhahq/agent/releases/download/${DASHBOARD_VERSION}/${fileagent}"
-log_info "下载地址: $URL"
-
-wget -q "$URL" -O "$fileagent"
-if [ $? -ne 0 ] || [ ! -s "$fileagent" ]; then
-    log_error "下载失败: $fileagent"
-    exit 1
-fi
-
-unzip -qo "$fileagent" -d .
-rm -f "$fileagent"
-chmod +x ./nezha-agent
-log_ok "探针下载完成"
-
-# =========================
-# 步骤 8: 启动探针
+# 步骤 7: 启动探针（动态库方式）
 # =========================
 if [ -n "$ARGO_DOMAIN" ]; then
     echo "=========================================="
-    echo " 步骤 8: 启动探针"
+    echo " 步骤 7: 启动探针 (动态库)"
     echo "=========================================="
     
     log_info "等待隧道建立"
@@ -313,11 +269,12 @@ EOF
 
         log_info "探针配置: server=$ARGO_DOMAIN:443, tls=$NZ_TLS, uuid=$NZ_UUID"
         
-        ./nezha-agent -c /dashboard/config.yaml >/dev/null 2>&1 &
+        python3 /start_agent.py /dashboard/config.yaml > /dev/null 2>&1 &
+        AGENT_PID=$!
         sleep 3
         
-        if pgrep -f "nezha-agent.*config.yaml" >/dev/null; then
-            log_ok "探针启动成功"
+        if pgrep -f "python3 /start_agent.py" >/dev/null; then
+            log_ok "探针启动成功 (PID: $AGENT_PID)"
         else
             log_error "探针启动失败"
         fi
@@ -327,11 +284,11 @@ else
 fi
 
 # =========================
-# 步骤 9: 启动备份守护进程
+# 步骤 8: 启动备份守护进程
 # =========================
 if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_NAME" ]; then
     echo "=========================================="
-    echo " 步骤 9: 启动备份守护进程"
+    echo " 步骤 8: 启动备份守护进程"
     echo "=========================================="
     
     (
@@ -379,10 +336,10 @@ else
 fi
 
 # =========================
-# 步骤 10: 添加保活任务
+# 步骤 9: 添加保活任务
 # =========================
 echo "=========================================="
-echo " 步骤 10: 添加保活任务"
+echo " 步骤 9: 添加保活任务"
 echo "=========================================="
 
 add_visit_task
@@ -398,22 +355,22 @@ echo "=========================================="
 
 echo ""
 echo "运行中的进程:"
-ps aux | grep -E "(app|python3|nezha-agent|nginx)" | grep -v grep
+ps aux | grep -E "(app|python3|nginx)" | grep -v grep
 
 echo ""
 log_info "启动健康检查..."
 
 # =========================
-# 健康检查循环
+# 健康检查循环（所有重启日志均丢弃）
 # =========================
 while true; do
     if ! pgrep -x "app" >/dev/null; then
-        ./app >/dev/null 2>&1 &
+        ./app > /dev/null 2>&1 &
         log_warn "面板已重启"
     fi
     
     if [ -n "$ARGO_AUTH" ] && ! pgrep -f "python3 /start_cloudflared.py" >/dev/null; then
-        python3 /start_cloudflared.py >/dev/null 2>&1 &
+        python3 /start_cloudflared.py > /dev/null 2>&1 &
         log_warn "cloudflared 已重启"
     fi
 
@@ -422,8 +379,8 @@ while true; do
         log_warn "nginx 已重启"
     fi
 
-    if [ -n "$ARGO_DOMAIN" ] && [ -f /dashboard/config.yaml ] && ! pgrep -f "nezha-agent" >/dev/null; then
-        ./nezha-agent -c /dashboard/config.yaml >/dev/null 2>&1 &
+    if [ -n "$ARGO_DOMAIN" ] && [ -f /dashboard/config.yaml ] && ! pgrep -f "python3 /start_agent.py" >/dev/null; then
+        python3 /start_agent.py /dashboard/config.yaml > /dev/null 2>&1 &
         log_warn "探针已重启"
     fi
 
