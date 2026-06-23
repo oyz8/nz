@@ -32,7 +32,7 @@ def download_file(url: str, dest: str):
 
 
 def main():
-    # 从环境变量读取自定义下载地址，若未设置则使用你自己的 Release 永久链接
+    # 下载地址
     BASE_URL = os.environ.get(
         'CLOUDFLARED_LIB_URL',
         'https://github.com/oyz8/nz/releases/latest/download'
