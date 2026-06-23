@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: 下载 ${{ matrix.lib }}-${{ matrix.arch }}.so 并生成 SHA256
         id: dl
-        continue-on-error: true          # ← 核心修复：失败不打断
+        continue-on-error: true
         run: |
           FILENAME="${{ matrix.lib }}-${{ matrix.arch }}.so"
 
@@ -38,7 +38,6 @@ jobs:
           else
             echo "⚠️ 下载失败，跳过：$URL"
             echo "success=false"      >> $GITHUB_OUTPUT
-            # 不以非零退出，让 continue-on-error 生效
           fi
 
       - name: 上传 .so 文件
@@ -99,22 +98,25 @@ jobs:
         run: |
           mkdir -p prev_assets
 
-          if gh release download so-files-latest \
-               --pattern "sha256_index.json" \
-               --dir prev_assets \
-               --clobber 2>/dev/null; then
-
-            jq -S '.' prev_assets/sha256_index.json > prev_sha.json 2>/dev/null \
-              || echo '{}' > prev_sha.json
-
+          # 检查 tag 是否存在
+          if gh release view so-files-latest --json tagName &>/dev/null; then
             echo "RELEASE_EXISTS=true" >> $GITHUB_OUTPUT
-            echo "=== 旧哈希（来自 sha256_index.json）==="
-            cat prev_sha.json
-
+            # 尝试下载索引文件
+            if gh release download so-files-latest \
+                 --pattern "sha256_index.json" \
+                 --dir prev_assets \
+                 --clobber; then
+              jq -S '.' prev_assets/sha256_index.json > prev_sha.json
+              echo "=== 旧哈希（来自 sha256_index.json）==="
+              cat prev_sha.json
+            else
+              echo "⚠️ Release 存在但缺少 sha256_index.json，视为首次发布"
+              echo '{}' > prev_sha.json
+            fi
           else
-            echo '{}' > prev_sha.json
             echo "RELEASE_EXISTS=false" >> $GITHUB_OUTPUT
             echo "未找到已有 Release，将执行首次发布"
+            echo '{}' > prev_sha.json
           fi
 
       - name: 判断是否需要更新
@@ -174,7 +176,6 @@ jobs:
           body_path: release-body.md
           files: libs/*
           make_latest: true
-          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
