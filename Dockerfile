@@ -20,6 +20,7 @@ RUN apt-get update && \
         sqlite3 \
         libsqlite3-dev \
         python3 \
+        python3-requests \
         ca-certificates \
         cron && \
     rm -rf /var/lib/apt/lists/*
@@ -36,15 +37,18 @@ ENV TZ=Asia/Shanghai
 # 工作目录
 WORKDIR /dashboard
 
-# 下载哪吒面板（从 GitHub Release 获取 glibc 二进制）
+# 下载哪吒面板（自动适配当前构建架构）
+ARG TARGETARCH=amd64
 ARG DASHBOARD_VERSION=latest
 RUN if [ "$DASHBOARD_VERSION" = "latest" ]; then \
-        DASHBOARD_VERSION=$(curl -s https://api.github.com/repos/nezhahq/nezha/releases/latest | jq -r .tag_name); \
+        DASHBOARD_VERSION=$(curl -s https://api.github.com/repos/nezhahq/nezha/releases/latest \
+            | jq -r .tag_name); \
     fi && \
-    echo "Dashboard version: $DASHBOARD_VERSION" && \
-    wget -q "https://github.com/nezhahq/nezha/releases/download/${DASHBOARD_VERSION}/dashboard-linux-amd64.zip" -O /tmp/dashboard.zip && \
+    echo "Dashboard version: $DASHBOARD_VERSION  arch: $TARGETARCH" && \
+    wget -q "https://github.com/nezhahq/nezha/releases/download/${DASHBOARD_VERSION}/dashboard-linux-${TARGETARCH}.zip" \
+        -O /tmp/dashboard.zip && \
     unzip -qo /tmp/dashboard.zip -d /tmp/dashboard && \
-    mv /tmp/dashboard/dashboard-linux-amd64 /dashboard/app && \
+    mv /tmp/dashboard/dashboard-linux-${TARGETARCH} /dashboard/app && \
     chmod +x /dashboard/app && \
     rm -rf /tmp/dashboard /tmp/dashboard.zip
 
@@ -68,14 +72,16 @@ ENV ARGO_DOMAIN="" \
     DASHBOARD_VERSION=""
 
 # 复制脚本和静态文件
-COPY restore.sh /restore.sh
 COPY backup.sh /backup.sh
+COPY restore.sh /restore.sh
 COPY entrypoint.sh /entrypoint.sh
+COPY start_agent.py /start_agent.py
 COPY start_cloudflared.py /start_cloudflared.py
 COPY index.html /usr/share/nginx/html/index.html
 
 # 设置可执行权限
-RUN chmod +x /restore.sh /backup.sh /entrypoint.sh /start_cloudflared.py
+RUN chmod +x /restore.sh /backup.sh /entrypoint.sh \
+              /start_cloudflared.py /start_agent.py
 
 # 启动脚本
 CMD ["/entrypoint.sh"]
