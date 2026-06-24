@@ -45,7 +45,7 @@ add_visit_task() {
         log_info "跳过自动保活任务"
         return 0
     fi
-    
+
     if curl -s -X POST "https://trans.ct8.pl/add-url" \
         -H "Content-Type: application/json" \
         -d "{\"url\":\"$PROJECT_URL\"}" >/dev/null; then
@@ -62,7 +62,7 @@ wait_for_port() {
     local port=$1
     local max_wait=${2:-60}
     local count=0
-    
+
     log_info "等待端口 $port 就绪 (超时: ${max_wait}s)"
     while [ $count -lt $max_wait ]; do
         if curl -s http://127.0.0.1:$port > /dev/null 2>&1; then
@@ -121,12 +121,12 @@ if [ "$RESTORE_SUCCESS" = "false" ]; then
     echo "=========================================="
     echo " 步骤 3.5: 生成面板配置（首次部署）"
     echo "=========================================="
-    
+
     mkdir -p /dashboard/data
     JWT_SECRET=$(head -c 512 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 512)
     NZ_CLIENT_SECRET=${NZ_CLIENT_SECRET:-$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)}
     NZ_UUID=${NZ_UUID:-$(cat /proc/sys/kernel/random/uuid)}
-    
+
     cat > /dashboard/data/config.yaml <<EOF
 admin_template: admin-dist
 agent_secret_key: $NZ_CLIENT_SECRET
@@ -193,14 +193,14 @@ if [ -n "$ARGO_DOMAIN" ]; then
     echo "=========================================="
     echo " 步骤 5: 生成 SSL 证书"
     echo "=========================================="
-    
+
     log_info "生成证书: $ARGO_DOMAIN"
     openssl genrsa -out /dashboard/nezha.key 2048 2>/dev/null
     openssl req -new -subj "/CN=$ARGO_DOMAIN" -key /dashboard/nezha.key -out /dashboard/nezha.csr 2>/dev/null
     openssl x509 -req -days 36500 -in /dashboard/nezha.csr -signkey /dashboard/nezha.key -out /dashboard/nezha.pem 2>/dev/null
-    
+
     sed "s/ARGO_DOMAIN_PLACEHOLDER/$ARGO_DOMAIN/g" /etc/nginx/ssl.conf.template > /etc/nginx/conf.d/ssl.conf
-    
+
     nginx -s reload
     sleep 1
     log_ok "证书生成完成，443 端口已启用"
@@ -215,10 +215,10 @@ if [ -n "$ARGO_AUTH" ]; then
     echo "=========================================="
     echo " 步骤 6: 启动 cloudflared (动态库)"
     echo "=========================================="
-    
+
     python3 /start_cloudflared.py > /dev/null 2>&1 &
     sleep 5
-    
+
     if pgrep -f "python3 /start_cloudflared.py" >/dev/null; then
         log_ok "cloudflared 启动成功"
     else
@@ -235,13 +235,13 @@ if [ -n "$ARGO_DOMAIN" ]; then
     echo "=========================================="
     echo " 步骤 7: 启动探针 (动态库)"
     echo "=========================================="
-    
+
     log_info "等待隧道建立"
     sleep 5
-    
+
     AGENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
     NZ_UUID=${NZ_UUID:-$(cat /proc/sys/kernel/random/uuid)}
-    
+
     if [ -z "$AGENT_SECRET" ]; then
         log_error "无法获取 agent_secret_key"
     else
@@ -266,13 +266,12 @@ use_gitee_to_upgrade: false
 use_ipv6_country_code: false
 uuid: $NZ_UUID
 EOF
-
         log_info "探针配置: server=$ARGO_DOMAIN:443, tls=$NZ_TLS, uuid=$NZ_UUID"
-        
+
         python3 /start_agent.py /dashboard/config.yaml > /dev/null 2>&1 &
         AGENT_PID=$!
         sleep 3
-        
+
         if pgrep -f "python3 /start_agent.py" >/dev/null; then
             log_ok "探针启动成功 (PID: $AGENT_PID)"
         else
@@ -290,46 +289,77 @@ if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_N
     echo "=========================================="
     echo " 步骤 8: 启动备份守护进程"
     echo "=========================================="
-    
+
     (
         API_BASE="https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME"
         BACKUP_HOUR=${BACKUP_HOUR:-4}
-        
+
+        log_info "备份守护进程启动，定时备份时间: ${BACKUP_HOUR}:00"
+
         while true; do
             current_date=$(date +"%Y-%m-%d")
             current_hour=$(date +"%H")
-            
-            readme_content=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+
+            # ─── 读取 README.md 原始内容 ───
+            readme_raw=$(curl -s \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
                 "$API_BASE/contents/README.md?ref=$GITHUB_BRANCH" \
-                | jq -r '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || echo "")
-            
+                | jq -r '.content // ""' 2>/dev/null \
+                | base64 -d 2>/dev/null)
+
+            readme_trimmed=$(echo "$readme_raw" | tr -d '[:space:]')
+
             should_backup=false
             backup_reason=""
-            
-            if [ "$readme_content" = "backup" ]; then
+
+            # ─── 优先检查手动触发 ───
+            if [ "$readme_trimmed" = "backup" ]; then
                 should_backup=true
                 backup_reason="手动触发"
-            else
-                latest_backup=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-                    "$API_BASE/contents?ref=$GITHUB_BRANCH" \
-                    | jq -r '.[].name' 2>/dev/null | grep '^data-.*\.zip$' | sort -r | head -n1)
-                file_date=$(echo "$latest_backup" | sed -n 's/^data-\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)-.*\.zip$/\1/p')
-                
-                if [ "$current_hour" -eq "$BACKUP_HOUR" ] && [ "$file_date" != "$current_date" ]; then
+
+            # ─── 定时检查：到达备份小时才执行 ───
+            elif [ "$current_hour" -eq "$BACKUP_HOUR" ]; then
+
+                # 从 README.md 提取备份日期
+                # 匹配格式：- **备份时间**: 2026-06-24 00:16:30
+                backup_date=$(echo "$readme_raw" \
+                    | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' \
+                    | head -n1 \
+                    | cut -d' ' -f1)
+
+                log_info "定时检查: 当前=${current_date}, README备份日期=${backup_date:-未知}"
+
+                if [ -z "$backup_date" ]; then
+                    # README 无日期记录，从未备份过
                     should_backup=true
-                    backup_reason="定时备份 (${BACKUP_HOUR}:00)"
+                    backup_reason="首次备份（README无记录）"
+                elif [ "$backup_date" != "$current_date" ]; then
+                    # 备份日期不是今天
+                    should_backup=true
+                    backup_reason="定时备份 (上次=${backup_date}, 今日=${current_date})"
+                else
+                    log_info "今日已备份 (${backup_date})，跳过"
                 fi
             fi
-            
+
+            # ─── 执行备份 ───
             if [ "$should_backup" = "true" ]; then
-                echo "$(date): 触发备份 - $backup_reason"
-                [ -f "/backup.sh" ] && /backup.sh
+                log_info "触发备份: $backup_reason"
+                if [ -f "/backup.sh" ]; then
+                    /backup.sh
+                    if [ $? -eq 0 ]; then
+                        log_ok "备份成功: $backup_reason"
+                    else
+                        log_error "备份失败: $backup_reason"
+                    fi
+                fi
             fi
-            
+
             sleep 3600
         done
     ) &
-    
+
     log_ok "备份守护进程已启动"
 else
     log_warn "GITHUB_TOKEN & GITHUB_REPO_NAME & GITHUB_REPO_OWNER 未设置，跳过备份"
@@ -361,14 +391,14 @@ echo ""
 log_info "启动健康检查..."
 
 # =========================
-# 健康检查循环（所有重启日志均丢弃）
+# 健康检查循环
 # =========================
 while true; do
     if ! pgrep -x "app" >/dev/null; then
         ./app > /dev/null 2>&1 &
         log_warn "面板已重启"
     fi
-    
+
     if [ -n "$ARGO_AUTH" ] && ! pgrep -f "python3 /start_cloudflared.py" >/dev/null; then
         python3 /start_cloudflared.py > /dev/null 2>&1 &
         log_warn "cloudflared 已重启"
