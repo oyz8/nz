@@ -143,8 +143,7 @@ FROM ghcr.io/oyz8/nz:latest
 2. 部署成功后，使用 Cloudflare 分配的域名（即环境变量 `ARGO_DOMAIN` 的值）访问面板。
 3. **保活提醒**：HuggingFace Space 需要保持活跃以防休眠，请自行处理保活，或通过设置 `PROJECT_URL` 变量来实现自动保活。
 4. **哪吒面板设置 Telegram 通知收不到 ？**  
-   这是 HuggingFace 的常见网络限制，无法直接访问 `api.telegram.org`。你必须配置一个反代地址。可使用以下 Cloudflare Workers 脚本自建反代：  
-   [Cloudflare Workers 自建反代脚本](https://raw.githubusercontent.com/oyz8/LemeHost/refs/heads/main/_worker.js)
+   这是 HuggingFace 的常见网络限制，无法直接访问 `api.telegram.org`。你必须配置一个反代地址。可使用:[Cloudflare Workers 自建反代脚本](https://raw.githubusercontent.com/oyz8/LemeHost/refs/heads/main/_worker.js)
 
 - URL如下
 ```URL
