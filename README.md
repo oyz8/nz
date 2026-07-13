@@ -14,7 +14,7 @@
 | `ARGO_DOMAIN`       | `nezha.com`                  | ✅  | 面板访问域名，同时用于探针上报                                                                  |
 | `GITHUB_TOKEN`      | `ghp_xxxxxxxx`                  | ✅  | GitHub Token，用于配置文件自动备份到 GitHub                                                  |
 | `GITHUB_REPO_OWNER` | `your_username`                 | ✅  | 备份仓库所有者                                                                          |
-| `GITHUB_REPO_NAME`  | `nezha-backup`                  | ✅  | 存储配置备份的仓库名称  注意是私有仓库                                                                    |
+| `GITHUB_REPO_NAME`  | `nezha-backup`                  | ✅  | 存储配置备份的仓库名称 `注意配置私有仓库`                                                              |
 | `GITHUB_BRANCH`     | `main`                          | ✅  | 备份使用的分支名称                                                                        |
 | `ZIP_PASSWORD`      | `147369`                        | ✅  | 备份压缩包加密密码                                                                        |
 | `NZ_UUID`           | `f8ff434*************62e0`      | ✅  |  在线生成访问:https://www.uuidgenerator.net/                                                           |
@@ -139,9 +139,37 @@ FROM ghcr.io/oyz8/nz:latest
 
 ### 第 6 步：查看部署日志
 
-1. 进入 **Logs** 查看部署进度
-2. 部署成功后，使用 **Cloudflare 域名**（`ARGO_DOMAIN`）访问面板
-3. 抱脸空间需要保活的，自行解决 或 设置 `PROJECT_URL` 变量
+1. 进入 **Logs** 页面，查看部署进度。
+2. 部署成功后，使用 Cloudflare 分配的域名（即环境变量 `ARGO_DOMAIN` 的值）访问面板。
+3. **保活提醒**：HuggingFace Space 需要保持活跃以防休眠，请自行处理保活，或通过设置 `PROJECT_URL` 变量来实现自动保活。
+4. **哪吒面板设置 Telegram 通知收不到 ？**  
+   这是 HuggingFace 的常见网络限制，无法直接访问 `api.telegram.org`。你必须配置一个反代地址。可使用以下 Cloudflare Workers 脚本自建反代：  
+   [Cloudflare Workers 自建反代脚本](https://raw.githubusercontent.com/oyz8/LemeHost/refs/heads/main/_worker.js)
+
+- URL如下
+```URL
+https://xxx.xxx.workers.dev/bot123456789:Assssssssssssssssssssk/sendMessage
+```
+- 请求方式:POST
+- 类型:JSON
+- 请求体如下
+```请求体
+{
+    "chat_id": "123456789",
+    "text": "🔰 *探针警报*\n\n*来自*: \" *#SERVER.NAME# *\"\n*#NEZHA#*\n\n*时间*： *#DATETIME# *",
+    "parse_mode": "Markdown",
+    "reply_markup": {
+        "inline_keyboard": [
+            [
+                {
+                    "text": " 探针仪表盘",
+                    "url": "https://nezha.com"
+                }
+            ]
+        ]
+    }
+```
+- 勾选:验证TLS
 
 ---
 
