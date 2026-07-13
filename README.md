@@ -14,7 +14,7 @@
 | `ARGO_DOMAIN`       | `nezha.com`                  | ✅  | 面板访问域名，同时用于探针上报                                                                  |
 | `GITHUB_TOKEN`      | `ghp_xxxxxxxx`                  | ✅  | GitHub Token，用于配置文件自动备份到 GitHub                                                  |
 | `GITHUB_REPO_OWNER` | `your_username`                 | ✅  | 备份仓库所有者                                                                          |
-| `GITHUB_REPO_NAME`  | `nezha-backup`                  | ✅  | 存储配置备份的仓库名称                                                                      |
+| `GITHUB_REPO_NAME`  | `nezha-backup`                  | ✅  | 存储配置备份的仓库名称  注意是私有仓库                                                                    |
 | `GITHUB_BRANCH`     | `main`                          | ✅  | 备份使用的分支名称                                                                        |
 | `ZIP_PASSWORD`      | `147369`                        | ✅  | 备份压缩包加密密码                                                                        |
 | `NZ_UUID`           | `f8ff434*************62e0`      | ✅  |  在线生成访问:https://www.uuidgenerator.net/                                                           |
