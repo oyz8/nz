@@ -91,26 +91,22 @@ jobs:
           echo "=== 当前哈希 ==="
           cat current_sha.json
 
-      - name: 读取旧 Release 哈希（若存在）
+      - name: 读取旧 Release 哈希（从 Body 解析）
         id: old_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p prev_assets
-
-          # 检查 tag 是否存在
           if gh release view so-files-latest --json tagName &>/dev/null; then
             echo "RELEASE_EXISTS=true" >> $GITHUB_OUTPUT
-            # 尝试下载索引文件
-            if gh release download so-files-latest \
-                 --pattern "sha256_index.json" \
-                 --dir prev_assets \
-                 --clobber; then
-              jq -S '.' prev_assets/sha256_index.json > prev_sha.json
-              echo "=== 旧哈希（来自 sha256_index.json）==="
+            # 获取 Release Body 中的 ```json ... ``` 代码块
+            BODY=$(gh release view so-files-latest --json body -q '.body')
+            HASH_JSON=$(echo "$BODY" | sed -n '/```json/,/```/p' | sed '1d;$d')
+            if echo "$HASH_JSON" | jq empty 2>/dev/null; then
+              echo "$HASH_JSON" | jq -S '.' > prev_sha.json
+              echo "=== 旧哈希（来自 Release Body）==="
               cat prev_sha.json
             else
-              echo "⚠️ Release 存在但缺少 sha256_index.json，视为首次发布"
+              echo "⚠️ Release Body 中未包含有效哈希信息，视为首次发布"
               echo '{}' > prev_sha.json
             fi
           else
@@ -142,7 +138,7 @@ jobs:
                 ) | from_entries'
           fi
 
-      - name: 生成 Release body
+      - name: 生成 Release body（内嵌哈希 JSON）
         if: steps.compare.outputs.changed == 'true'
         run: |
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
@@ -158,23 +154,30 @@ jobs:
           | freebsd | `https://00.ssss.nyc.mn/freebsd-*.so` |
 
           BODYEOF
-          echo "更新时间：$TIMESTAMP" >> release-body.md
+
+          # 添加哈希 JSON 代码块
+          echo ""                         >> release-body.md
+          echo "### 🔑 本次文件哈希"      >> release-body.md
+          echo '```json'                  >> release-body.md
+          cat current_sha.json            >> release-body.md
+          echo '```'                      >> release-body.md
+          echo ""                         >> release-body.md
+          echo "更新时间：$TIMESTAMP"     >> release-body.md
 
       - name: 准备发布产物
         if: steps.compare.outputs.changed == 'true'
         run: |
-          cp current_sha.json libs/sha256_index.json
           echo "=== 最终发布文件列表 ==="
           ls -lh libs/
 
-      - name: 发布/更新 Release
+      - name: 发布/更新 Release（只上传 .so 文件）
         if: steps.compare.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: so-files-latest
           name: "动态库集合"
           body_path: release-body.md
-          files: libs/*
+          files: libs/*.so
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
