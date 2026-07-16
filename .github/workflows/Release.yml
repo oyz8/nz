@@ -58,7 +58,8 @@ jobs:
     needs: download
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      actions: write
     steps:
       - name: 下载所有产物
         uses: actions/download-artifact@v4
