@@ -51,21 +51,12 @@ jobs:
         run: |
           echo "镜像：ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}:${{ inputs.image_tag }}"
 
-  cleanup:
-    name: 清理旧运行记录
-    runs-on: ubuntu-latest
-    needs: build
-    if: always()
-    
-    permissions:
-      actions: write
-
-    steps:
-      - name: 清理旧工作流运行记录
+      - name: 清理历史运行记录
+        if: always()
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ github.token }}
           repository: ${{ github.repository }}
           delete_workflow_pattern: ${{ github.workflow }}
           retain_days: 0
-          keep_minimum_runs: 2
+          keep_minimum_runs: 1
