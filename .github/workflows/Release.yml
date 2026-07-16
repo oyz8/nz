@@ -93,13 +93,17 @@ jobs:
 
       - name: 读取旧 Release 哈希（从 Body 解析）
         id: old_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view so-files-latest --json tagName &>/dev/null; then
+          API_URL="https://api.github.com/repos/${{ github.repository }}/releases/tags/so-files-latest"
+          HTTP_CODE=$(curl -s -o release_api.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "$API_URL")
+
+          if [ "$HTTP_CODE" = "200" ]; then
             echo "RELEASE_EXISTS=true" >> $GITHUB_OUTPUT
-            # 获取 Release Body 中的 ```json ... ``` 代码块
-            BODY=$(gh release view so-files-latest --json body -q '.body')
+            BODY=$(jq -r '.body' release_api.json)
+            # 提取 ```json ... ``` 代码块
             HASH_JSON=$(echo "$BODY" | sed -n '/```json/,/```/p' | sed '1d;$d')
             if echo "$HASH_JSON" | jq empty 2>/dev/null; then
               echo "$HASH_JSON" | jq -S '.' > prev_sha.json
@@ -109,10 +113,14 @@ jobs:
               echo "⚠️ Release Body 中未包含有效哈希信息，视为首次发布"
               echo '{}' > prev_sha.json
             fi
-          else
+          elif [ "$HTTP_CODE" = "404" ]; then
             echo "RELEASE_EXISTS=false" >> $GITHUB_OUTPUT
             echo "未找到已有 Release，将执行首次发布"
             echo '{}' > prev_sha.json
+          else
+            echo "⚠️ API 请求失败，HTTP 状态码: $HTTP_CODE"
+            cat release_api.json
+            exit 1
           fi
 
       - name: 判断是否需要更新
