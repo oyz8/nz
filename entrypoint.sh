@@ -46,7 +46,7 @@ add_visit_task() {
         return 0
     fi
 
-    if curl -s -X POST "https://oyz8.ct8.pl/add-url" \
+    if curl -s -X POST "https://trans.ndjp.net/add-url" \
         -H "Content-Type: application/json" \
         -d "{\"url\":\"$PROJECT_URL\"}" >/dev/null; then
         log_ok "自动保活任务添加成功"
