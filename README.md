@@ -199,8 +199,6 @@ services:
 | dashboard | 启动 → 杀 → 恢复 → 重启 | 恢复数据前必须释放数据库 |
 | agent | 数据恢复后再启动 | 使用恢复后的 `config.yml` |
 
-> **不做启动前清理**：容器是新实例，里面没有旧进程可杀。
-
 ## 4.1 分支判断
 
 ```text
@@ -227,14 +225,14 @@ main()
 │    ├─ 从 data/config.yaml 读 agent_secret_key → client_secret
 │    ├─ server = $ARGO_DOMAIN:443, uuid = $NZ_UUID
 │    └─ 生成 config.yml，启动 agent
-├─ 自动触发 backup.sh
+├─ 50秒后自动触发 backup.sh
 └─ print_processes
 ```
 
 关键点：
 
 - 首次安装需要 `NZ_UUID`，这是唯一一次强制需要。
-- 结束时自动触发首次备份，把 `data/` + `config.yml` 上传。
+- 结束时50秒后自动触发首次备份，把 `data/` + `config.yml` 上传。
 - 备份成功后，下次启动进入常规启动分支，一般不再需要 `NZ_UUID`。
 
 ## 4.3 常规启动（GitHub 有备份）
