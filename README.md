@@ -61,12 +61,28 @@ Token 格式：`github_pat_xxxxxxxxxxxx`
 
 > 两种 Token 都只显示一次，立刻复制保存。
 
-## 1.3 创建 Cloudflare Tunnel
+# 1.3 创建 Cloudflare Tunnel
 
 1. **Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared**
 2. 复制 `eyJ` 开头的 Token → `ARGO_AUTH`
 3. 配置 Public Hostname（规则见 [第六部分](#六路径分流架构)）
 4. 记下面板域名 → `ARGO_DOMAIN`
+
+## Public Hostname 规则
+
+| 顺序 | Domain | Type | URL | 路径 |
+|---|---|---|---|---|
+| 1 | `nezha.nyc.mn` | HTTPS | `localhost:443` | `*` |
+
+## 其他应用程序设置 → TLS
+
+添加 Public Hostname 规则时，在**「其他应用程序设置」→「TLS」**里必须配置以下两项：
+
+| 选项 | 值 | 说明 |
+|---|---|---|
+| **不进行 TLS 验证** | ✅ 开 | 容器内使用的是自签名证书，Cloudflare 默认会校验证书链，开启后跳过校验，否则会报 `x509: certificate signed by unknown authority` |
+| **HTTP2 连接** | ✅ 开 | Agent 通过 HTTP/2 gRPC 上报数据，必须用 HTTP/2 连接才能正常通信 |
+
 
 ## 1.4 Cloudflare 网络开关
 
