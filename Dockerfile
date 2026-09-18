@@ -20,6 +20,6 @@ WORKDIR /app
 
 RUN chmod +x start.sh backup.sh restore.sh restart.sh renew.sh
 
-EXPOSE 80 443
+EXPOSE 443 8008
 
 ENTRYPOINT ["/app/start.sh"]
