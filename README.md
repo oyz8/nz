@@ -52,6 +52,13 @@
 |---|---|
 | `NZ_UUID` | agent 唯一标识 在线生成：[UUID](https://www.uuidgenerator.net/) |
 
+> ⚠️ **`NZ_UUID` 有两个用途**：
+>
+> 1. **首次安装**（GitHub 仓库无 `data-*.zip`）：生成 `config.yml`，让容器自己作为一台机器被面板监控。
+> 2. **备份里没有 `config.yml`** 时：脚本需要重新生成 agent 配置，也依赖 `NZ_UUID`。旧版本备份、首次安装时未启用 agent、或手动删除过 `config.yml` 的备份，都可能出现这种情况。
+>
+> **如果不需要监控容器自己**（面板只用于监控其他机器），可以不设 `NZ_UUID`，agent 不会启动，面板和其他 agent 不受影响。
+
 ### 可选
 
 | 变量 | 默认 | 说明 |
@@ -62,7 +69,7 @@
 | `NZ_TLS` | `true` | agent TLS 开关 |
 | `DASHBOARD_VERSION` | 空 | 留空 = latest，设值锁定版本 |
 
-> **口诀：首次安装填 `NZ_UUID`；有备份什么都别管，恢复即用。**
+> **口诀：首次安装填 `NZ_UUID`；有备份且备份含 `config.yml` 时什么都不用管，恢复即用。**
 
 ---
 
@@ -131,15 +138,19 @@ main()
 │    ├─ 下载最新备份
 │    ├─ 解压到临时目录
 │    ├─ 恢复 /app/data/*
-│    ├─ 恢复 /app/config.yml
+│    ├─ 恢复 /app/config.yml（如备份中存在）
 │    └─ 清理 WAL/SHM
 ├─ start_dashboard            （加载恢复后的数据）
 ├─ sleep 3                    （等 dashboard 读完）
-├─ start_agent                （用恢复后的 config.yml，不碰环境变量）
+├─ start_agent
+│    ├─ config.yml 已恢复   → 直接用
+│    └─ config.yml 不存在   → 检查 NZ_UUID
+│         ├─ 有 NZ_UUID    → 从 data/config.yaml 读 agent_secret_key 生成
+│         └─ 无 NZ_UUID    → 警告，跳过 agent
 └─ print_processes
 ```
 
-> 常规启动**不需要** `NZ_UUID`。
+> 常规启动**一般不需要** `NZ_UUID`，但**如果备份里没有 `config.yml`，就需要**。
 
 ### 6.4 日志示例
 
@@ -161,7 +172,7 @@ main()
 [SUCCESS] 备份文件已上传 ✓
 ```
 
-**常规启动**
+**常规启动（备份含 config.yml）**
 
 ```
 [STEP] ===== 5/6 检查 GitHub 备份 =====
@@ -183,6 +194,28 @@ main()
 [ OK ] agent 启动完成
 ```
 
+**常规启动（备份不含 config.yml，设了 `NZ_UUID`）**
+
+```
+[STEP] ===== 6/6 常规启动（恢复数据） =====
+[INFO]     └─ 备份中无 config.yml，跳过（首次安装会生成）
+[ OK ]     恢复完成 🎉
+[INFO] 启动 dashboard...
+[ OK ] dashboard 启动完成
+[INFO] 首次安装，生成 agent config.yml...
+[INFO]     └─ client_secret 来源: dashboard agent_secret_key
+[INFO] 启动 agent...
+[ OK ] agent 启动完成
+```
+
+**常规启动（备份不含 config.yml，未设 `NZ_UUID`）**
+
+```
+[INFO] 缺少 NZ_UUID / ARGO_DOMAIN，跳过 agent
+```
+
+（面板和其他 agent 不受影响）
+
 ---
 
 # 第三部分 · 备份与恢复
@@ -198,6 +231,8 @@ data-2026-09-18-02-30-00.zip
 ```
 
 ZIP 使用 `ZIP_PASSWORD` 加密，上传到 GitHub 仓库根目录，通过 Contents API 管理。
+
+> `config.yml` **可能不存在**（首次安装时未设 `NZ_UUID`，或早期版本备份）。恢复脚本会做兼容处理。
 
 ## 八、首次安装自动触发备份 ⚠️
 
@@ -277,7 +312,10 @@ data-2026-08-18-14-30-00.zip
 3. agent 用恢复的配置启动
 4. **不需要** 设 `NZ_UUID`
 
-只有**全新部署**（GitHub 完全没备份）才需要 `NZ_UUID`。首次安装会自动触发备份，之后所有启动都是常规模式。
+只有以下两种情况才需要 `NZ_UUID`：
+
+- **全新部署**（GitHub 完全没备份）
+- **备份里没有 `config.yml`**（旧版本备份，或首次安装时未启用 agent），同时希望监控容器自己
 
 ---
 
@@ -409,10 +447,11 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 |---|---|
 | **首次安装后 GitHub 仓库没出现备份** | 检查 4 个 GitHub 环境变量、`ZIP_PASSWORD` 是否正确，以及 Token 是否有 `repo` 权限；也可手动把 README 改为 `backup` 重试 |
 | **首次备份失败导致重启后 agent 全部失联** | 说明 `agent_secret_key` 没被保存。重启后面板生成新的 secret，需要重新添加 agent；先手动触发备份再重启 |
+| **备份里没有 `config.yml`，agent 没启动** | 说明备份是旧版本或首次安装未启用 agent。若想监控容器自己，**需要设置 `NZ_UUID`**，脚本会从恢复的 `data/config.yaml` 读 `agent_secret_key` 重新生成 `config.yml` |
 | 面板打开但探针离线 | **Cloudflare 未开启 gRPC**：Cloudflare 控制台 → 选择域名（如 `nezha.nyc.mn`）→ 网络 → 打开 gRPC 开关 |
 | 面板打开但终端/文件管理连不上 | **Cloudflare 未开启 WebSockets**：同上位置，打开 WebSockets 开关 |
 | 面板打开但 agent 离线 | 检查 `config.yml` 里的 `client_secret` 是否与 `data/config.yaml` 的 `agent_secret_key` 一致 |
-| 恢复后 agent 没启动 | 检查备份里是否有 `config.yml`，或首次安装时是否设置了 `NZ_UUID` |
+| 恢复后 agent 没启动 | 检查备份里是否有 `config.yml`；若没有，需设置 `NZ_UUID` 让脚本重新生成 |
 | 备份文件太大 | 减小 `TRANSFERS_KEEP_DAYS`（保留更少天数）或 `BACKUP_KEEP_COUNT` |
 | GitHub 上传报文件太大 | 单文件 base64 后超过 47MB，需减小 `TRANSFERS_KEEP_DAYS` |
 | 手动备份没触发 | README 内容必须**只有** `backup` |
@@ -429,9 +468,9 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 
 | 项 | 说明 |
 |---|---|
-| `NZ_UUID` | **仅首次安装需要**，有备份后从 `config.yml` 恢复 |
+| `NZ_UUID` | **两个用途**：① 首次安装生成 `config.yml`；② 备份里没有 `config.yml` 时重新生成 agent 配置。有备份且备份含 `config.yml` 时不需要 |
 | **首次安装自动备份** | 首次安装结束时立即触发 `backup.sh`，建立「有备份」状态，之后所有启动都是常规模式 |
-| 备份包中的 `config.yml` | **agent 配置的权威来源**，恢复后覆盖容器内的 |
+| 备份包中的 `config.yml` | **agent 配置的权威来源**，恢复后覆盖容器内的；若备份不含，且设了 `NZ_UUID`，会重新生成 |
 | 备份保留天数 | 只影响 `transfers` 表（流量记录），其他表完整保留 |
 | 存储方式 | GitHub 仓库根目录的 `data-*.zip` 文件，通过 Contents API 上传 |
 | nginx 生命周期 | **全程在线**，只在启动时启一次，不随恢复流程重启 |
