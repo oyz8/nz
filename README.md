@@ -154,7 +154,7 @@ data-2026-09-18-02-30-00.zip
 
 | 服务 | 生命周期 | 原因 |
 |---|---|---|
-| nginx | **全程在线**，| 保证 80/8008 端口持续监听，健康检查不中断 |
+| nginx | **全程在线**，| 保证 8008 端口持续监听，健康检查不中断 |
 | cloudflared | **全程在线**，| 隧道连接稳定，避免重连延迟 |
 | dashboard | 启动 → 杀 → 恢复 → 重启 | 恢复数据前必须释放数据库 |
 | agent | 数据恢复后再启动 | 使用恢复后的 `config.yml` |
@@ -294,7 +294,7 @@ backup
 容器在下次检查（最多 1 小时）时会立即执行备份。
 
 > ⚠️ 内容必须**只有** `backup` 6 个字符，不含空格、换行或其他字符。  
-> ⚠️ 恢复脚本（`restore.sh`）在启动时检测到 `README.md` 内容为 `backup` 时，会直接跳过恢复流程（视为手动触发标记），不会执行恢复操作。
+> ⚠️ 恢复脚本（`restore.sh`）在启动时检测到 `README.md` 内容为 `backup` 时，会直接跳过恢复流程，不会执行恢复操作。
 
 ## 5.5 指定恢复备份
 
@@ -326,7 +326,7 @@ data-2026-08-18-14-30-00.zip
 
 > 首次安装时，`main()` 流程结束时直接调用一次 `backup.sh`，不等 while 循环，保证初始状态立即上传。
 
-## 5.7 迁移 / 换平台
+## 5.7 迁移 / 换机
 
 从旧实例换到新实例，行为等同于**常规启动**：
 
@@ -353,58 +353,68 @@ data-2026-08-18-14-30-00.zip
 
 恢复脚本优先查找 `data/sqlite.db`（新版格式），其次查找根目录 `sqlite.db`（旧版格式），均未找到则跳过恢复并列出解压内容供参考。
 
-如果结构非常规，可手动解压查看后调整，或参考 `restore.sh` 里的兜底逻辑适配。
-
 ---
 
 # 六、路径分流架构
 
 ## 6.1 核心思路
 
-Nginx 同时监听 **80 端口**（HTTP/2）和 **443 端口**（HTTPS/TLS），并统一按路径分发：
+Nginx 监听 **443 端口**（HTTPS/TLS）。Cloudflare Tunnel 统一将流量转发到 `https://localhost:443`，由 Nginx 在容器内按路径分发：
 
-- **Agent gRPC 通信**：`/proto.NezhaService/*` 走 Nginx 的 `grpc_pass`，利用 HTTP/2 多路复用和 keepalive 提供稳定 gRPC 代理。
-- **WebSocket 长连接**：`/api/v1/ws/(server|terminal|file)` 走 Nginx 的 `proxy_pass`，并透传 `Upgrade`/`Connection` 头，支持面板终端、文件管理、实时日志。
-- **面板 HTTP/API 请求**：其余所有路径 `/` 直连 Dashboard（`localhost:8008`），不额外经过协议转换。
+- **Agent gRPC 通信**：`/proto.NezhaService/*` 走 `grpc_pass`，HTTP/2 多路复用 + keepalive。
+- **WebSocket 长连接**：`/api/v1/ws/(server|terminal|file)` 走 `proxy_pass` 并透传 `Upgrade`/`Connection` 头，支持面板终端、文件管理、实时日志。
+- **面板 HTTP/API 请求**：其余路径 `/` 反代到 `localhost:8008`（Dashboard）。
 
-> **443 端口用途**：当 Agent 通过非 Cloudflare Tunnel 方式直连（或平台 Tunnel 未处理 TLS）时，Agent 可直接连接 `ARGO_DOMAIN:443`，由 Nginx 自签名证书终止 TLS 后转发 gRPC。正常通过 Cloudflare Tunnel 使用时，Tunnel 已处理 TLS，443 端口作为备用通道。
+## 6.2 方案 A：单域名
 
-## 6.2 方案 A：共用同一个域名（推荐）
+Cloudflare Tunnel 配**一条规则**：
 
-Cloudflare Tunnel 配**一个 Subdomain**，拆两条路径规则：
+| 顺序 | Domain | Type | URL | 路径 |
+|---|---|---|---|---|
+| 1 | `nezha.nyc.mn` | HTTPS | `localhost:443` | `*` |
 
-| 顺序 | Domain | Type | URL | 路径 | 用途 |
-|---|---|---|---|---|---|
-| 1 | `nezha.nyc.mn` | HTTP | `localhost:80` | `/proto.NezhaService/*` | Agent gRPC 经 Nginx |
-| 2 | `nezha.nyc.mn` | HTTP | `localhost:8008` | `*` | 面板直连 Dashboard |
+**其他应用程序设置 → TLS**：
+
+| 选项 | 值 |
+|---|---|
+| 不进行 TLS 验证 | ✅ 开 |
+| HTTP2 连接 | ✅ 开 |
 
 - `ARGO_DOMAIN` = `nezha.nyc.mn`
 - 浏览器打开 `https://nezha.nyc.mn` 就是面板
 - Agent 连接 `nezha.nyc.mn:443`
 
-> **规则顺序很重要**：`/proto.NezhaService/*` 必须排在 `*` 之前，Cloudflare 按顺序匹配，命中即停止。
+对，所有在 Tunnel 里绑定了规则的域名，都可以同时作为面板访问地址和 Agent 连接地址使用，不限于 `nezha.nyc.mn`。更新这部分说明。
+
+---
 
 ## 6.3 方案 B：SaaS 自定义主机名
 
-Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare for SaaS 自定义主机名**访问。
+Cloudflare Tunnel 每个域名配**一条规则**，全部指向 `https://localhost:443`：
 
-关键点：SaaS 回退时**保留原始 Host**，Tunnel 按 Host + Path 匹配，所以**每个自定义主机名都要在 Tunnel 里单独配一条 `*` 规则**。
+| 顺序 | Domain | Type | URL | 路径 |
+|---|---|---|---|---|
+| 1 | `nezha.nyc.mn` | HTTPS | `localhost:443` | `*` |
+| 2 | `nezha.loc.cc` | HTTPS | `localhost:443` | `*` |
+| 3 | `nezha.A.tw` | HTTPS | `localhost:443` | `*` |
+| 4 | `nezha.B.kg` | HTTPS | `localhost:443` | `*` |
+| … | 其他自定义主机名 | HTTPS | `localhost:443` | `*` |
 
-### B.1 Tunnel Public Hostname 规则
+**每条规则**的其他应用程序设置 → TLS：
 
-| 顺序 | Domain | Type | URL | 路径 | 用途 |
-|---|---|---|---|---|---|
-| 1 | `nezha.nyc.mn` | HTTP | `localhost:80` | `/proto.NezhaService/*` | Agent gRPC 经 Nginx |
-| 2 | `nezha.loc.cc` | HTTP | `localhost:8008` | `*` | 面板直连 Dashboard |
-| 3 | `nezha.A.tw` | HTTP | `localhost:8008` | `*` | 面板直连 Dashboard |
-| 4 | `nezha.B.kg` | HTTP | `localhost:8008` | `*` | 面板直连 Dashboard |
-| 5 | `nezha.C.og` | HTTP | `localhost:8008` | `*` | 面板直连 Dashboard |
-| … | 其他自定义主机名 | HTTP | `localhost:8008` | `*` | 每个 SaaS 域名一条 |
+| 选项 | 值 |
+|---|---|
+| 不进行 TLS 验证 | ✅ 开 |
+| HTTP2 连接 | ✅ 开 |
 
-- `ARGO_DOMAIN` = `nezha.nyc.mn`（Agent 连接地址）
-- Agent 连接 `nezha.nyc.mn:443`
+所有在 Tunnel 里绑定了规则的域名，均可同时用于：
 
-### B.2 Cloudflare for SaaS
+- **面板访问**：浏览器打开 `https://<任意已绑定域名>/`
+- **Agent 连接**：`ARGO_DOMAIN` 填任意已绑定域名，Agent 连接 `<该域名>:443`
+
+> `ARGO_DOMAIN` 只需选一个域名填写即可，填哪个都能正常工作，习惯上填回退源域名 `nezha.nyc.mn`。
+
+### Cloudflare for SaaS
 
 进入 **SSL/TLS → 自定义主机名**：
 
@@ -414,44 +424,28 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 | 自定义主机名 | `nezha.loc.cc`、`nezha.A.tw`、`nezha.B.kg`、`nezha.C.og` … |
 | 每个自定义主机名 | 客户 CNAME 到 `nezha.nyc.mn` |
 
-> ⚠️ 每在 SaaS 里添加一个自定义主机名，就要在 Tunnel 里同步添加一条对应的 `*` 规则，否则请求会走到 Tunnel 的 catch-all 规则返回 404。
+### 为什么每个域名都要在 Tunnel 单独加一条
 
-### B.3 流量路径
+SaaS 回退时 **Host 头保留为自定义主机名**（如 `nezha.loc.cc`），Tunnel 按 Host 匹配 ingress 规则。`nezha.nyc.mn` 的规则只匹配 host 为 `nezha.nyc.mn` 的请求，无法匹配 `nezha.loc.cc`，缺少对应规则会返回 404。
 
-```text
-用户访问 https://nezha.loc.cc/
-        │
-        ▼
-① Cloudflare 边缘节点
-        │
-        ▼
-② Cloudflare for SaaS（自定义主机名匹配）
-        │ 命中 nezha.loc.cc
-        ▼
-③ 回退到回退源：nezha.nyc.mn
-        │ Host 头保留为 nezha.loc.cc
-        ▼
-④ Cloudflare Tunnel（回退源隧道入口）
-        │ 按 Host + Path 匹配 ingress 规则
-        ▼
-⑤ 命中 nezha.loc.cc + * → localhost:8008（Dashboard）
-```
+### 维护口诀
 
-### B.4 使用方式
+> **加一个域名 = SaaS 加一条自定义主机名 + Tunnel 加一条对应规则（HTTPS localhost:443，开 TLS 跳过 + HTTP2）。**
 
-| 访问方式 | 落到哪里 | 说明 |
+## 6.4 两个方案对比
+
+| 对比项 | 方案 A（单域名） | 方案 B（SaaS 多域名） |
 |---|---|---|
-| `https://nezha.nyc.mn/proto.NezhaService/*` | `localhost:80`（Nginx → gRPC） | Agent 上报 |
-| `https://nezha.loc.cc/` | `localhost:8008`（Dashboard） | 客户域名 A |
-| `https://nezha.A.tw/` | `localhost:8008`（Dashboard） | 客户域名 B |
-| `https://nezha.B.kg/` | `localhost:8008`（Dashboard） | 客户域名 C |
-| `https://nezha.C.og/` | `localhost:8008`（Dashboard） | 客户域名 D |
+| 适用场景 | 单个面板域名 | 多个自定义访问域名 |
+| Tunnel 规则数 | 1 条 | 每个域名 1 条 |
+| Type | HTTPS | HTTPS |
+| URL | `localhost:443` | `localhost:443` |
+| 不进行 TLS 验证 | ✅ 开 | ✅ 开 |
+| HTTP2 连接 | ✅ 开 | ✅ 开 |
+| 协议分发位置 | Nginx 443（按路径） | Nginx 443（按路径） |
+| 新增域名时 | 不适用 | SaaS + Tunnel 各加一条 |
 
-### B.5 维护口诀
-
-> **加一个域名 = SaaS 加一条 + Tunnel 加一条。**
-
-## 6.4 Cloudflare 侧必须开启 gRPC + WebSockets
+## 6.5 Cloudflare 侧必须开启 gRPC + WebSockets
 
 进入 Cloudflare 仪表盘 → 选中回退源域名（如 `nezha.nyc.mn`）→ 左侧菜单 **网络**：
 
@@ -460,11 +454,12 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 | ✅ **gRPC** | Agent 通过 HTTP/2 gRPC 上报数据 | Agent 无法上报，面板显示探针离线 |
 | ✅ **WebSockets** | 面板终端、文件管理、实时日志等长连接 | 终端连不上、文件管理打不开、实时数据不刷新 |
 
-> 这两个开关与 Nginx 的 `grpc_pass` / `Upgrade` 配置是独立环节，缺一不可：
-> - Nginx 负责容器内部的反代和协议转发；
-> - Cloudflare 负责边缘网络对 HTTP/2 gRPC 和 WebSocket 升级的放行。
+> 三个层面缺一不可：
+> - **Tunnel 侧**：HTTP2 连接 + 不进行 TLS 验证，保证 Cloudflare 到容器走 HTTP/2；
+> - **Nginx**：`grpc_pass` / `Upgrade` 头处理，容器内协议正确转发；
+> - **Cloudflare 网络开关**：边缘网络放行 gRPC 和 WebSocket 升级。
 >
-> 方案 B 下，只需给回退源域名开启这两个开关即可，自定义主机名不需要单独开。
+> 方案 B 下，只需给回退源域名（`nezha.nyc.mn`）开启这两个开关，自定义主机名不需要单独开。
 
 ---
 
@@ -509,10 +504,8 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 | 手动备份没触发 | README 内容必须只有 `backup`（6 个字符，无多余空格换行） |
 | 指定恢复没生效 | README 内容必须只有 `data-xxx.zip`，且该文件确实存在于仓库中 |
 | 面板版本没更新 | `DASHBOARD_VERSION` 已设置会锁定版本，改为留空即可跟随最新 |
-| 面板间歇性 502 | 检查 Cloudflare Tunnel 路由是否按第六部分分流：面板直连 8008，Agent 走 Nginx 80 |
-| 方案 A 下 Agent 连不上 | 确认 `/proto.NezhaService/*` 规则排在 `*` 规则之前 |
-| 方案 B 下 `nezha.nyc.mn/` 访问 404 | 正常现象，`nezha.nyc.mn` 只用于 gRPC，面板请用 `nezha.loc.cc` 等自定义主机名 |
-| SaaS 客户域名回退 404 | 检查是否在 Tunnel 里为对应域名加了 `*` → `localhost:8008` 规则 |
+| Tunnel 配了 `https://localhost:443` 但连接失败 | 检查 Tunnel 侧是否开启「不进行 TLS 验证」和「HTTP2 连接」 |
+| SaaS 客户域名访问 404 | 检查是否在 Tunnel 里为对应域名加了对应规则（HTTPS localhost:443） |
 | agent 未下载/未启动 | `NZ_UUID` 或 `ARGO_DOMAIN` 任一未设置，`start.sh` 会跳过 agent 下载与启动 |
 
 ---
@@ -532,6 +525,7 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 | dashboard 生命周期 | 首次启动 → 常规启动时杀一次 → 恢复后重启 |
 | 旧数据归档 | 恢复前将现有 `/app/data` mv 为 `/app/data.bak.<timestamp>`，只保留最近 1 份 |
 | **Cloudflare 网络开关** | **gRPC + WebSockets 都要打开**，缺一不可 |
+| **Tunnel TLS 设置** | 不进行 TLS 验证 + HTTP2 连接，每条 Tunnel 规则都要开 |
 | 进程日志脱敏 | `print_processes` 输出时自动将 `--token` 和 `TUNNEL_TOKEN=` 后的 Token 替换为 `***REDACTED***` |
 
 ## 相关文件
