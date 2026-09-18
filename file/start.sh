@@ -101,50 +101,6 @@ map $real_ip $final_ip {
     "~.+"   $real_ip;
 }
 
-server {
-    listen 80;
-    http2 on;
-
-    underscores_in_headers on;
-
-    location ^~ /proto.NezhaService/ {
-        grpc_set_header Host $host;
-        grpc_set_header nz-realip $final_ip;
-        grpc_set_header CF-Connecting-IP $final_ip;
-        grpc_read_timeout 600s;
-        grpc_send_timeout 600s;
-        grpc_socket_keepalive on;
-        client_max_body_size 10m;
-        grpc_buffer_size 4m;
-        grpc_pass grpc://dashboard;
-    }
-
-    location ~* ^/api/v1/ws/(server|terminal|file)(.*)$ {
-        proxy_set_header Host $host;
-        proxy_set_header nz-realip $final_ip;
-        proxy_set_header CF-Connecting-IP $final_ip;
-        proxy_set_header Origin https://$host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_pass http://127.0.0.1:8008;
-    }
-
-    location / {
-        proxy_set_header Host $host;
-        proxy_set_header nz-realip $final_ip;
-        proxy_set_header CF-Connecting-IP $final_ip;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_buffer_size 128k;
-        proxy_buffers 4 256k;
-        proxy_busy_buffers_size 256k;
-        proxy_max_temp_file_size 0;
-        proxy_pass http://127.0.0.1:8008;
-    }
-}
-
 upstream dashboard {
     server 127.0.0.1:8008;
     keepalive 2048;
@@ -152,7 +108,7 @@ upstream dashboard {
 }
 EOF
 
-# ========== 443 端口配置（agent 通过 CF Tunnel 连接） ==========
+# ========== 443 端口 ==========
     cat << SSLEOF > /etc/nginx/conf.d/ssl.conf
 server {
     listen 443 ssl;
@@ -218,7 +174,7 @@ SSLEOF
     ok "nginx 配置写入完成"
 }
 
-# ========== 优化 nginx 主配置  ==========
+# ========== 优化 nginx 主配置 ==========
 # 扛住大量 agent、WebSocket、gRPC 的并发连接
 optimize_nginx_main_conf() {
     cat > /etc/nginx/nginx.conf << 'NINXEOF'
@@ -521,7 +477,6 @@ while true; do
     fi
 
     # ---------- 版本更新检查 ----------
-    # 设置了 DASHBOARD_VERSION 就锁定版本，跳过更新检查
     if [ -z "${DASHBOARD_VERSION:-}" ]; then
         [ -f "renew.sh" ] && ./renew.sh
     else
