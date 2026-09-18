@@ -1,4 +1,4 @@
-# V1 版哪吒面板 · 部署文档（优化版）
+# V1 版哪吒面板 · 部署文档
 
 容器化部署，自动备份到 GitHub，面板支持指定版本、可选自动更新、Argo 隧道。
 
@@ -124,7 +124,7 @@ Public Hostname 与路径分流配置见 [第六部分](#六路径分流架构)�
 | `GITHUB_BRANCH` | `main` | 备份仓库分支 |
 | `BACKUP_KEEP_COUNT` | `5` | 保留最近 N 个备份 |
 | `TRANSFERS_KEEP_DAYS` | `7` | 备份中保留最近 N 天的流量记录 |
-| `DASHBOARD_VERSION` | 空 | 留空 = latest；设值则锁定版本 |
+| `DASHBOARD_VERSION` | 空 | 留空 = latest；设值则锁定版本 如：v2.2.10 |
 
 ## 2.4 ZIP 包内部结构
 
