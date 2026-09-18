@@ -1,0 +1,81 @@
+name: 🐳 构建 Docker 平台哪吒镜像
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: '镜像名称'
+        required: true
+        default: 'argo-nezha'
+        type: string
+      image_tag:
+        description: '镜像标签'
+        required: true
+        default: 'latest'
+        type: string
+
+jobs:
+  build:
+    name: 构建并推送镜像
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: 拉取 docker 分支代码
+        uses: actions/checkout@v4
+        with:
+          ref: docker
+
+      - name: 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 确定镜像名称和标签
+        id: meta
+        run: |
+          NAME="${{ inputs.image_name }}"
+          TAG="${{ inputs.image_tag }}"
+          [ -z "$NAME" ] && NAME="argo-nezha"
+          [ -z "$TAG" ]  && TAG="latest"
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "tag=$TAG"   >> $GITHUB_OUTPUT
+          echo "构建: ghcr.io/${{ github.repository_owner }}/$NAME:$TAG"
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 输出镜像信息
+        run: |
+          echo "=========================================="
+          echo "镜像已推送："
+          echo "  ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.tag }}"
+          echo "=========================================="
+          echo ""
+          echo "⚠️ 首次构建后请到 GitHub → Packages → 该镜像 → Package settings"
+          echo "   将可见性改为 Public，否则部分平台（如 Koyeb）无法拉取。"
+
+      - name: 清理历史运行记录
+        if: always()
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          delete_workflow_pattern: ${{ github.workflow }}
+          retain_days: 0
+          keep_minimum_runs: 1
