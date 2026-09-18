@@ -142,49 +142,7 @@ data-2026-09-18-02-30-00.zip
 
 # 三、部署容器
 
-把环境变量配置到 Koyeb / Docker / 其他平台，启动容器。
-
-## 3.1 Docker Run 示例
-
-```bash
-docker run -d \
-  --name argo-nezha \
-  --restart unless-stopped \
-  -v "$(pwd)/data:/app/data" \
-  -e ARGO_DOMAIN=nezha.example.com \
-  -e ARGO_AUTH=eyJ... \
-  -e GITHUB_TOKEN=ghp_... \
-  -e GITHUB_REPO_OWNER=yourname \
-  -e GITHUB_REPO_NAME=nezha-backup \
-  -e ZIP_PASSWORD=yourpassword \
-  -e NZ_UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
-  <镜像地址>
-```
-
-## 3.2 Docker Compose 示例
-
-```yaml
-services:
-  argo-nezha:
-    image: <镜像地址>
-    container_name: argo-nezha
-    restart: unless-stopped
-    volumes:
-      - ./data:/app/data
-    environment:
-      - ARGO_DOMAIN=nezha.example.com
-      - ARGO_AUTH=eyJ...
-      - GITHUB_TOKEN=ghp_...
-      - GITHUB_REPO_OWNER=yourname
-      - GITHUB_REPO_NAME=nezha-backup
-      - ZIP_PASSWORD=yourpassword
-      - NZ_UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-```
-
-## 3.3 其他平台
-
-按平台要求配置上述环境变量，并持久化 `/app/data`。  
-若平台支持，也建议持久化 `/app/config.yml`；否则常规启动时会从 GitHub 备份恢复。
+目前测试可部署容器 Koyeb / Northflank / 其他平台容器自行测试。
 
 ---
 
