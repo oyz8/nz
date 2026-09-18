@@ -134,7 +134,7 @@ Public Hostname 与路径分流配置见 [第六部分](#六路径分流架构)�
 data-2026-09-18-02-30-00.zip
 ├── config.yml              ← agent 配置（含 client_secret + uuid）
 └── data/
-    ├── config.yaml         ← dashboard 配置（含 agent_secret_key）
+    ├── config.yaml         ← dashboard 配置（含 client_secret）
     └── sqlite.db           ← dashboard 数据库
 ```
 
