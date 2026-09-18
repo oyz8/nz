@@ -1,4 +1,4 @@
-name: 🐳 构建自己的镜像吧
+name: 🐳 构建抱脸平台哪吒镜像
 
 on:
   workflow_dispatch:
