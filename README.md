@@ -1,6 +1,6 @@
 # V1 版哪吒面板 · 部署文档
 
-容器化部署，自动备份到 GitHub，面板支持指定版本、可选自动更新、Argo 隧道。
+容器化部署，自动备份到 GitHub，支持指定版本、可选自动更新、Argo 隧道。
 
 > ⚠️ **首次安装完成后第一件事：进面板改密码**（默认 `admin/admin`）。  
 > ⚠️ **Cloudflare 侧必须同时打开 `gRPC` 和 `WebSockets`**，否则 Agent 离线、终端/文件管理无法使用。  
@@ -103,7 +103,7 @@ Public Hostname 与路径分流配置见 [第六部分](#六路径分流架构)�
 
 `NZ_UUID` 有两个用途：
 
-1. 首次安装时生成 `config.yml`
+1. 首次安装时生成 `config.yml`（Agent 配置）
 2. 备份里没有 `config.yml` 时，重新生成 Agent 配置
 
 | 场景 | 是否需要 `NZ_UUID` |
@@ -116,6 +116,8 @@ Public Hostname 与路径分流配置见 [第六部分](#六路径分流架构)�
 > **建议**：首次部署时无论如何都设上 `NZ_UUID`。这样首次备份就会包含 `config.yml`，未来迁移可直接恢复，不用再管这个变量。  
 > 在线生成 UUID：<https://www.uuidgenerator.net/>
 
+> ⚠️ **注意**：`NZ_UUID` 未设置或 `ARGO_DOMAIN` 未设置时，`start.sh` 会跳过 agent 的下载与启动。两个变量都设置，agent 才会被下载和运行。
+
 ## 2.3 可选变量
 
 | 变量 | 默认 | 说明 |
@@ -124,15 +126,15 @@ Public Hostname 与路径分流配置见 [第六部分](#六路径分流架构)�
 | `GITHUB_BRANCH` | `main` | 备份仓库分支 |
 | `BACKUP_KEEP_COUNT` | `5` | 保留最近 N 个备份 |
 | `TRANSFERS_KEEP_DAYS` | `7` | 备份中保留最近 N 天的流量记录 |
-| `DASHBOARD_VERSION` | 空 | 留空 = latest；设值则锁定版本 如：v2.2.10 |
+| `DASHBOARD_VERSION` | 空 | 留空 = latest；设值则锁定版本，如 `v2.2.10` |
 
 ## 2.4 ZIP 包内部结构
 
 ```text
 data-2026-09-18-02-30-00.zip
-├── config.yml              ← agent 配置
+├── config.yml              ← agent 配置（含 client_secret + uuid）
 └── data/
-    ├── config.yaml         ← dashboard 配置
+    ├── config.yaml         ← dashboard 配置（含 agent_secret_key）
     └── sqlite.db           ← dashboard 数据库
 ```
 
@@ -152,8 +154,8 @@ data-2026-09-18-02-30-00.zip
 
 | 服务 | 生命周期 | 原因 |
 |---|---|---|
-| nginx | **全程在线**，只启动一次 | 保证 80 端口持续监听，健康检查不中断 |
-| cloudflared | **全程在线**，只启动一次 | 隧道连接稳定，避免重连延迟 |
+| nginx | **全程在线**，| 保证 80/8008 端口持续监听，健康检查不中断 |
+| cloudflared | **全程在线**，| 隧道连接稳定，避免重连延迟 |
 | dashboard | 启动 → 杀 → 恢复 → 重启 | 恢复数据前必须释放数据库 |
 | agent | 数据恢复后再启动 | 使用恢复后的 `config.yml` |
 
@@ -162,9 +164,10 @@ data-2026-09-18-02-30-00.zip
 ```text
 main()
   │
+  ├─ 0. 临时目录初始化
   ├─ 1. 环境变量检查
-  ├─ 2. 初始化 nginx / SSL
-  ├─ 3. 下载 dashboard + agent
+  ├─ 2. 初始化 nginx / SSL（生成自签名证书 + 写入配置）
+  ├─ 3. 下载 dashboard（+ 满足条件时下载 agent）
   ├─ 4. 启动 nginx + cloudflared（全程在线）
   │
   └─ 5. 检查 GitHub 是否有 data-*.zip
@@ -177,20 +180,23 @@ main()
 ```text
 ├─ start_nginx_cloudflared
 ├─ start_dashboard
-├─ sleep 3
+├─ sleep 3（等待 dashboard 初始化 data 目录）
 ├─ start_agent
 │    ├─ config.yml 不存在
+│    ├─ 检查 NZ_UUID / ARGO_DOMAIN → 任一缺失则跳过 agent
 │    ├─ 从 data/config.yaml 读 agent_secret_key → client_secret
-│    ├─ server = $ARGO_DOMAIN:443, uuid = $NZ_UUID
+│    ├─ server = $ARGO_DOMAIN:443, uuid = $NZ_UUID, tls = $NZ_TLS
 │    └─ 生成 config.yml，启动 agent
-├─ 50秒后自动触发 backup.sh
+├─ 打印警告提示（修改默认密码 admin/admin）
+├─ sleep 50（给用户时间改密码）
+├─ 触发 backup.sh（首次备份）
 └─ print_processes
 ```
 
 关键点：
 
 - 首次安装需要 `NZ_UUID`，这是唯一一次强制需要。
-- 结束时50秒后自动触发首次备份，把 `data/` + `config.yml` 上传。
+- 等待 50 秒后自动触发首次备份，把 `data/` + `config.yml` 上传。
 - 备份成功后，下次启动进入常规启动分支，一般不再需要 `NZ_UUID`。
 
 ## 4.3 常规启动（GitHub 有备份）
@@ -198,21 +204,23 @@ main()
 ```text
 ├─ start_nginx_cloudflared
 ├─ start_dashboard
-├─ sleep 3
-├─ pkill dashboard
+├─ sleep 3（等待 dashboard 初始化）
+├─ pkill dashboard（释放数据库）
+├─ sleep 1
 ├─ restore.sh
 │    ├─ 下载最新备份或指定备份
 │    ├─ 解压到临时目录
-│    ├─ 恢复 /app/data/*
+│    ├─ mv 现有 /app/data → /app/data.bak.<timestamp>（只保留最近 1 份）
+│    ├─ mv 解压数据 → /app/data/
 │    ├─ 恢复 /app/config.yml（如备份中存在）
 │    └─ 清理 WAL/SHM
 ├─ start_dashboard
 ├─ sleep 3
 ├─ start_agent
 │    ├─ config.yml 已恢复   → 直接用
-│    └─ config.yml 不存在   → 检查 NZ_UUID
-│         ├─ 有 NZ_UUID    → 从 data/config.yaml 读 agent_secret_key 生成
-│         └─ 无 NZ_UUID    → 警告，跳过 agent
+│    └─ config.yml 不存在   → 检查 NZ_UUID / ARGO_DOMAIN
+│         ├─ 有             → 从 data/config.yaml 读 agent_secret_key 生成
+│         └─ 无             → 警告，跳过 agent
 └─ print_processes
 ```
 
@@ -237,9 +245,20 @@ ZIP 使用 `ZIP_PASSWORD` 加密，上传到 GitHub 仓库根目录，通过 Con
 > `config.yml` 可能不存在：首次安装未设 `NZ_UUID`，或来自早期版本/其他项目备份。  
 > 恢复脚本会兼容处理，缺失时若设了 `NZ_UUID` 会自动重新生成。
 
-## 5.2 首次安装自动触发备份 ⚠️
+## 5.2 备份内容说明
 
-首次安装完成后，脚本会自动执行一次 `backup.sh`，把当前初始状态上传到 GitHub 仓库。
+备份脚本（`backup.sh`）执行时：
+
+1. 对 `sqlite.db` 优先使用 `VACUUM INTO` 在线热备，失败则回退到 `.backup` 命令
+2. 复制 `data/` 目录中除 `sqlite.db-wal`、`sqlite.db-shm` 之外的所有文件
+3. 若 `/app/config.yml` 存在，一并打包进 ZIP
+4. 删除副本中 `TRANSFERS_KEEP_DAYS` 天前的 `transfers` 记录，并对副本执行 `VACUUM`
+5. 清理 `data/upload/` 目录和 `*.log` 文件，减小备份体积
+6. ZIP 文件通过 base64 编码后经 GitHub Contents API 上传；若 base64 后超过 47 MB，跳过上传并提示
+
+## 5.3 首次安装自动触发备份 ⚠️
+
+首次安装完成后，脚本会等待 **50 秒**（给用户改密码的时间），然后自动执行一次 `backup.sh`，把当前初始状态上传到 GitHub 仓库。
 
 这一步很关键：
 
@@ -264,7 +283,7 @@ ZIP 使用 `ZIP_PASSWORD` 加密，上传到 GitHub 仓库根目录，通过 Con
 
 > 手动重试：把 GitHub 仓库的 `README.md` 内容改为 `backup`，等最多 1 小时脚本会自动重试。
 
-## 5.3 手动触发备份
+## 5.4 手动触发备份
 
 将 GitHub 备份仓库中的 `README.md` 内容**全部替换**为：
 
@@ -274,9 +293,10 @@ backup
 
 容器在下次检查（最多 1 小时）时会立即执行备份。
 
-> ⚠️ 内容必须**只有** `backup` 6 个字符，不含空格、换行或其他字符。
+> ⚠️ 内容必须**只有** `backup` 6 个字符，不含空格、换行或其他字符。  
+> ⚠️ 恢复脚本（`restore.sh`）在启动时检测到 `README.md` 内容为 `backup` 时，会直接跳过恢复流程（视为手动触发标记），不会执行恢复操作。
 
-## 5.4 指定恢复备份
+## 5.5 指定恢复备份
 
 将 GitHub 备份仓库中的 `README.md` 内容**全部替换**为要恢复的文件名：
 
@@ -286,27 +306,27 @@ data-2026-08-18-14-30-00.zip
 
 重新部署容器时会恢复指定备份；如果该文件不存在，自动回退到最新备份。
 
-> ⚠️ 内容必须**只有文件名本身**。
+> ⚠️ 内容必须**只有文件名本身**，格式须为 `data-YYYY-MM-DD-HH-mm-ss.zip`。
 
-## 5.5 备份触发逻辑
+## 5.6 备份触发逻辑
 
 ```text
 每小时执行一次
     │
-    ├─ 自动备份检查（需要 GitHub 相关变量已设置）
+    ├─ 自动备份检查（需要 GITHUB_TOKEN / REPO_OWNER / REPO_NAME / ZIP_PASSWORD 均已设置）
     │    ├─ 查 GitHub 最新备份文件
     │    ├─ 没有备份文件？                 → 触发备份
     │    ├─ 最新备份日期 ≠ 今天 且 小时 ≥ 4 → 触发备份
-    │    └─ 其它                           → 跳过
+    │    └─ 其他                           → 跳过（打印原因）
     │
     └─ 版本更新检查
          ├─ DASHBOARD_VERSION 未设置 → 跑 renew.sh
-         └─ DASHBOARD_VERSION 已设置 → 跳过（锁定版本）
+         └─ DASHBOARD_VERSION 已设置 → 跳过（锁定版本，打印提示）
 ```
 
 > 首次安装时，`main()` 流程结束时直接调用一次 `backup.sh`，不等 while 循环，保证初始状态立即上传。
 
-## 5.6 迁移 / 换机
+## 5.7 迁移 / 换平台
 
 从旧实例换到新实例，行为等同于**常规启动**：
 
@@ -321,24 +341,19 @@ data-2026-08-18-14-30-00.zip
 | 备份不含 `config.yml` + 不监控容器自己 | ❌ 不需要 |
 | 备份来自其他项目、结构不一样 | 视情况，见 FAQ |
 
-## 5.7 跨项目迁移兼容
+## 5.8 跨项目迁移兼容
 
-不同项目/版本的备份结构可能不一致：
+不同项目/版本的备份结构可能不一致，`restore.sh` 的兼容策略：
 
-| 结构 | 示例 | 来源 |
-|---|---|---|
-| 标准（当前） | `data/config.yaml` + `data/sqlite.db` + `config.yml` | 本项目新版本 |
-| 旧版（无 `data/`） | `config.yaml` + `sqlite.db` 直接在根 | 本项目早期版本 |
-| 面板目录布局 | `dashboard/data/config.yaml` | 其他封装项目 |
-| 全量打包 | `app/data/config.yaml` + `app/config.yml` | 自定义脚本 |
+| 结构 | 示例 | 来源 | 是否支持 |
+|---|---|---|---|
+| 标准（当前） | `data/config.yaml` + `data/sqlite.db` + `config.yml` | 本项目 | ✅ 完整支持 |
+| 旧版（无 `data/`） | `config.yaml` + `sqlite.db` 直接在根 | 本项目早期版本 | ✅ 兼容支持 |
+| 其他结构 | `dashboard/data/config.yaml` 等 | 其他封装项目 | ⚠️ 自动跳过，不破坏已有数据 |
 
-`restore.sh` 已兼容：
+恢复脚本优先查找 `data/sqlite.db`（新版格式），其次查找根目录 `sqlite.db`（旧版格式），均未找到则跳过恢复并列出解压内容供参考。
 
-- 标准结构 `data/sqlite.db`
-- 旧版结构根目录 `sqlite.db`
-- 其他结构会自动跳过，**不破坏已有数据**
-
-如果结构非常规，可手动解压查看后调整，或参考 `restore.sh` 里的 `find` 兜底逻辑适配。
+如果结构非常规，可手动解压查看后调整，或参考 `restore.sh` 里的兜底逻辑适配。
 
 ---
 
@@ -346,8 +361,13 @@ data-2026-08-18-14-30-00.zip
 
 ## 6.1 核心思路
 
-- **Agent gRPC 通信**：`/proto.NezhaService/*` 继续走 Nginx（`localhost:80`），由 Nginx 提供稳定的 HTTP/2 和 gRPC 代理支持。
-- **面板 HTTP/API 请求**：所有其他路径 `*` 直连 Dashboard（`localhost:8008`），不再经过 Nginx 反代，避免 Nginx 对长连接或 gRPC 协议处理不当导致的间歇性 502。
+Nginx 同时监听 **80 端口**（HTTP/2）和 **443 端口**（HTTPS/TLS），并统一按路径分发：
+
+- **Agent gRPC 通信**：`/proto.NezhaService/*` 走 Nginx 的 `grpc_pass`，利用 HTTP/2 多路复用和 keepalive 提供稳定 gRPC 代理。
+- **WebSocket 长连接**：`/api/v1/ws/(server|terminal|file)` 走 Nginx 的 `proxy_pass`，并透传 `Upgrade`/`Connection` 头，支持面板终端、文件管理、实时日志。
+- **面板 HTTP/API 请求**：其余所有路径 `/` 直连 Dashboard（`localhost:8008`），不额外经过协议转换。
+
+> **443 端口用途**：当 Agent 通过非 Cloudflare Tunnel 方式直连（或平台 Tunnel 未处理 TLS）时，Agent 可直接连接 `ARGO_DOMAIN:443`，由 Nginx 自签名证书终止 TLS 后转发 gRPC。正常通过 Cloudflare Tunnel 使用时，Tunnel 已处理 TLS，443 端口作为备用通道。
 
 ## 6.2 方案 A：共用同一个域名（推荐）
 
@@ -423,9 +443,9 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 |---|---|---|
 | `https://nezha.nyc.mn/proto.NezhaService/*` | `localhost:80`（Nginx → gRPC） | Agent 上报 |
 | `https://nezha.loc.cc/` | `localhost:8008`（Dashboard） | 客户域名 A |
-| `https://nezha.A.tw/` | `localhost:8008`（Dashboard） | 客户域名 A |
-| `https://nezha.B.kg/` | `localhost:8008`（Dashboard） | 客户域名 B |
-| `https://nezha.C.og/` | `localhost:8008`（Dashboard） | 客户域名 C |
+| `https://nezha.A.tw/` | `localhost:8008`（Dashboard） | 客户域名 B |
+| `https://nezha.B.kg/` | `localhost:8008`（Dashboard） | 客户域名 C |
+| `https://nezha.C.og/` | `localhost:8008`（Dashboard） | 客户域名 D |
 
 ### B.5 维护口诀
 
@@ -461,6 +481,16 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
     └── renew.sh       # 检查更新 dashboard / agent
 ```
 
+### 各脚本说明
+
+| 脚本 | 说明 |
+|---|---|
+| `start.sh` | 容器入口。完成环境检查、SSL 证书生成、nginx 配置（80 + 443 双端口）、主配置优化、二进制下载、服务启动、分支判断，最后进入每小时备份+更新循环 |
+| `backup.sh` | 使用 `VACUUM INTO` / `.backup` 热备数据库，复制 `data/` 及 `config.yml`，清理旧 transfers 记录，ZIP 加密后上传 GitHub，维护 README，清理超出保留数量的旧备份 |
+| `restore.sh` | 读取 README 判断手动标记/指定文件/最新文件，下载并验证 ZIP，兼容新旧两种目录格式解压，mv 备份现有数据（保留最近 1 份），恢复数据并清理 WAL/SHM |
+| `renew.sh` | 对比本地与 GitHub Releases 最新版本，有新版则下载解压并重启 dashboard + agent |
+| `restart.sh` | 停止并重启 dashboard，供手动调用 |
+
 ---
 
 # 八、常见问题
@@ -471,18 +501,19 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 | **首次备份失败导致重启后 Agent 全部失联** | 说明 `agent_secret_key` 没被保存。重启后面板生成新 secret，需要重新添加 Agent；先手动触发备份再重启 |
 | **备份里没有 `config.yml`，Agent 没启动** | 备份来自旧版本或其他项目。若想监控容器自己，设置 `NZ_UUID`，脚本会从恢复的 `data/config.yaml` 读 `agent_secret_key` 重新生成 `config.yml` |
 | **跨项目迁移，备份结构不一样** | 支持标准结构 `data/sqlite.db` 和旧版结构根目录 `sqlite.db`；其他结构自动跳过且不破坏数据。可手动解压查看后适配 |
+| **备份文件超过 47 MB（base64 后）** | `backup.sh` 会跳过上传并提示，建议减小 `TRANSFERS_KEEP_DAYS` 或 `BACKUP_KEEP_COUNT` |
 | 面板打开但探针离线 | Cloudflare 未开启 gRPC：选择域名 → 网络 → 打开 gRPC 开关 |
 | 面板打开但终端/文件管理连不上 | Cloudflare 未开启 WebSockets：同上位置打开 WebSockets 开关 |
 | 面板打开但 Agent 离线 | 检查 `config.yml` 里的 `client_secret` 是否与 `data/config.yaml` 的 `agent_secret_key` 一致 |
 | 恢复后 Agent 没启动 | 检查备份里是否有 `config.yml`；若没有，需设置 `NZ_UUID` 让脚本重新生成 |
-| 备份文件太大 | 减小 `TRANSFERS_KEEP_DAYS` 或 `BACKUP_KEEP_COUNT` |
-| 手动备份没触发 | README 内容必须只有 `backup` |
-| 指定恢复没生效 | README 内容必须只有 `data-xxx.zip`，且该文件确实存在 |
+| 手动备份没触发 | README 内容必须只有 `backup`（6 个字符，无多余空格换行） |
+| 指定恢复没生效 | README 内容必须只有 `data-xxx.zip`，且该文件确实存在于仓库中 |
 | 面板版本没更新 | `DASHBOARD_VERSION` 已设置会锁定版本，改为留空即可跟随最新 |
 | 面板间歇性 502 | 检查 Cloudflare Tunnel 路由是否按第六部分分流：面板直连 8008，Agent 走 Nginx 80 |
 | 方案 A 下 Agent 连不上 | 确认 `/proto.NezhaService/*` 规则排在 `*` 规则之前 |
-| 方案 B 下 `nezha.nyc.mn/` 访问 404 | 正常现象，`nezha.nyc.mn` 只用于 gRPC，面板请用 `nezha.loc.cc` |
+| 方案 B 下 `nezha.nyc.mn/` 访问 404 | 正常现象，`nezha.nyc.mn` 只用于 gRPC，面板请用 `nezha.loc.cc` 等自定义主机名 |
 | SaaS 客户域名回退 404 | 检查是否在 Tunnel 里为对应域名加了 `*` → `localhost:8008` 规则 |
+| agent 未下载/未启动 | `NZ_UUID` 或 `ARGO_DOMAIN` 任一未设置，`start.sh` 会跳过 agent 下载与启动 |
 
 ---
 
@@ -490,15 +521,18 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 
 | 项 | 说明 |
 |---|---|
-| `NZ_UUID` | 两个用途：① 首次安装生成 `config.yml`；② 备份里没有 `config.yml` 时重新生成 Agent 配置。有备份且备份含 `config.yml` 时不需要 |
-| **首次安装自动备份** | 首次安装结束时立即触发 `backup.sh`，建立「有备份」状态，之后所有启动都是常规模式 |
+| `NZ_UUID` | 两个用途：① 首次安装生成 `config.yml`；② 备份里没有 `config.yml` 时重新生成 Agent 配置。有备份且备份含 `config.yml` 时不需要。`NZ_UUID` 或 `ARGO_DOMAIN` 任一缺失，agent 不会被下载或启动 |
+| **首次安装自动备份** | 首次安装等待 50 秒（给用户改密码）后立即触发 `backup.sh`，建立「有备份」状态，之后所有启动都是常规模式 |
 | 备份包中的 `config.yml` | Agent 配置的权威来源，恢复后覆盖容器内的；若备份不含，且设了 `NZ_UUID`，会重新生成 |
 | 备份保留天数 | 只影响 `transfers` 表（流量记录），其他表完整保留 |
-| 存储方式 | GitHub 仓库根目录的 `data-*.zip` 文件，通过 Contents API 上传 |
-| nginx 生命周期 | 全程在线，只在启动时启一次，不随恢复流程重启 |
-| cloudflared 生命周期 | 全程在线，只在启动时启一次 |
+| 存储方式 | GitHub 仓库根目录的 `data-*.zip` 文件，通过 Contents API 上传；单文件 base64 后不超过 47 MB |
+| nginx 生命周期 | 全程在线，只在启动时启一次，监听 80（HTTP/2）和 443（HTTPS）双端口，不随恢复流程重启 |
+| nginx 主配置优化 | `worker_rlimit_nofile 65535`、`worker_connections 20480`、`http2_max_concurrent_streams 2048`，适配大量 Agent + WebSocket + gRPC 并发连接 |
+| cloudflared 生命周期 | 全程在线，只在启动时启一次，使用 `--protocol http2` 运行 |
 | dashboard 生命周期 | 首次启动 → 常规启动时杀一次 → 恢复后重启 |
+| 旧数据归档 | 恢复前将现有 `/app/data` mv 为 `/app/data.bak.<timestamp>`，只保留最近 1 份 |
 | **Cloudflare 网络开关** | **gRPC + WebSockets 都要打开**，缺一不可 |
+| 进程日志脱敏 | `print_processes` 输出时自动将 `--token` 和 `TUNNEL_TOKEN=` 后的 Token 替换为 `***REDACTED***` |
 
 ## 相关文件
 
@@ -507,8 +541,10 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 | `/app/data/config.yaml` | 面板配置，含 `agent_secret_key` |
 | `/app/data/sqlite.db` | 面板数据库 |
 | `/app/config.yml` | Agent 配置，含 `client_secret` + `uuid` |
+| `/app/nezha.pem` | Nginx 自签名证书（443 端口用） |
+| `/app/nezha.key` | Nginx 自签名私钥（443 端口用） |
 | `/app/data.bak.*` | 恢复前的旧数据，自动保留最近 1 份 |
 
 ---
 
-**安全提示**：Cloudflare Tunnel Token、GitHub Token、ZIP 密码属于敏感信息，不要在日志、截图或公开渠道泄露。首次安装完成后立即修改面板默认密码。
+**安全提示**：Cloudflare Tunnel Token、GitHub Token、ZIP 密码属于敏感信息，不要在日志、截图或公开渠道泄露。首次安装完成后立即修改面板默认密码（默认 `admin/admin`）。
