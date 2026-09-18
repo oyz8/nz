@@ -33,43 +33,55 @@
 2. 复制 `eyJ` 开头的 Token → `ARGO_AUTH`
 3. 记下面板域名 → `ARGO_DOMAIN`
 
-## 四、准备环境变量
+## 四、环境变量对照表
+
+> 定义：
+> - **首次安装** = GitHub 备份仓库里没有 `data-*.zip`
+> - **有备份** = 仓库里至少有一个 `data-*.zip`
 
 ### 必需
 
-| 变量 | 说明 |
+| 变量 | 首次安装 | 有备份 | 说明 |
+|---|:---:|:---:|---|
+| `ARGO_AUTH` | ✅ 必需 | ✅ 必需 | Cloudflare Tunnel Token |
+| `ARGO_DOMAIN` | ✅ 必需 | ✅ 必需 | agent 连接地址 / SaaS 回退 |
+| `GITHUB_TOKEN` | ✅ 必需 | ✅ 必需 | 备份/恢复用 |
+| `GITHUB_REPO_OWNER` | ✅ 必需 | ✅ 必需 | 备份仓库所有者 |
+| `GITHUB_REPO_NAME` | ✅ 必需 | ✅ 必需 | 备份仓库名 |
+| `ZIP_PASSWORD` | ✅ 必需 | ✅ 必需 | 备份加密密码 |
+
+### `NZ_UUID` 的条件必需
+
+| 变量 | 首次安装 | 有备份 | 说明 |
+|---|:---:|:---:|---|
+| `NZ_UUID` | ✅ 必需 | ⚠️ 视情况 | **两个用途**：① 首次安装生成 `config.yml`；② 备份里没有 `config.yml` 时，重新生成 agent 配置。备份含 `config.yml` 时不需要 |
+
+**`NZ_UUID` 什么时候需要**
+
+| 场景 | 是否需要 |
 |---|---|
-| `ARGO_AUTH` | Cloudflare Tunnel Token |
-| `ARGO_DOMAIN` | agent 连接地址 / SaaS 回退源 |
-| `GITHUB_TOKEN` | 上一步生成的 PAT |
-| `GITHUB_REPO_OWNER` | 备份仓库所有者 |
-| `GITHUB_REPO_NAME` | 备份仓库名 |
-| `ZIP_PASSWORD` | 备份加密密码（任意字符串） |
+| 首次安装（GitHub 无备份） | ✅ 需要 |
+| 有备份 + 备份含 `config.yml` | ❌ 不需要 |
+| 有备份 + 备份**不含** `config.yml` + 想监控容器自己 | ✅ 需要 |
+| 有备份 + 备份**不含** `config.yml` + 不监控容器自己 | ❌ 不需要 |
 
-### 首次安装额外需要
-
-| 变量 | 说明 |
-|---|---|
-| `NZ_UUID` | agent 唯一标识 在线生成：[UUID](https://www.uuidgenerator.net/) |
-
-> ⚠️ **`NZ_UUID` 有两个用途**：
+> 在线生成 UUID：[UUID Generator](https://www.uuidgenerator.net/)
 >
-> 1. **首次安装**（GitHub 仓库无 `data-*.zip`）：生成 `config.yml`，让容器自己作为一台机器被面板监控。
-> 2. **备份里没有 `config.yml`** 时：脚本需要重新生成 agent 配置，也依赖 `NZ_UUID`。旧版本备份、首次安装时未启用 agent、或手动删除过 `config.yml` 的备份，都可能出现这种情况。
+> **建议**：首次部署时无论如何都设上 `NZ_UUID`。这样首次备份就会包含 `config.yml`，未来任何迁移都能直接恢复，永远不用再管这个变量。
 >
-> **如果不需要监控容器自己**（面板只用于监控其他机器），可以不设 `NZ_UUID`，agent 不会启动，面板和其他 agent 不受影响。
+> **备份里为什么会缺 `config.yml`**：本项目旧版本、其他封装项目的备份、或首次安装时未设 `NZ_UUID`。
 
 ### 可选
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
+| `NZ_TLS` | `true` | agent TLS 开关 |
 | `GITHUB_BRANCH` | `main` | 备份仓库分支 |
 | `BACKUP_KEEP_COUNT` | `5` | 保留最近 N 个备份 |
 | `TRANSFERS_KEEP_DAYS` | `7` | 备份中保留最近 N 天的流量记录 |
-| `NZ_TLS` | `true` | agent TLS 开关 |
 | `DASHBOARD_VERSION` | 空 | 留空 = latest，设值锁定版本 |
 
-> **口诀：首次安装填 `NZ_UUID`；有备份且备份含 `config.yml` 时什么都不用管，恢复即用。**
+**口诀：首次安装填 `NZ_UUID`；备份含 `config.yml` 时什么都别管，恢复即用；备份缺 `config.yml` 又想监控容器自己，也得填 `NZ_UUID`。**
 
 ---
 
@@ -232,7 +244,7 @@ data-2026-09-18-02-30-00.zip
 
 ZIP 使用 `ZIP_PASSWORD` 加密，上传到 GitHub 仓库根目录，通过 Contents API 管理。
 
-> `config.yml` **可能不存在**（首次安装时未设 `NZ_UUID`，或早期版本备份）。恢复脚本会做兼容处理。
+> `config.yml` **可能不存在**（首次安装时未设 `NZ_UUID`，或早期版本备份）。恢复脚本会做兼容处理，缺失时若设了 `NZ_UUID` 会自动重新生成。
 
 ## 八、首次安装自动触发备份 ⚠️
 
@@ -310,23 +322,45 @@ data-2026-08-18-14-30-00.zip
 1. GitHub 有备份 → 走常规启动分支
 2. 恢复 `data/` + `config.yml`
 3. agent 用恢复的配置启动
-4. **不需要** 设 `NZ_UUID`
 
-只有以下两种情况才需要 `NZ_UUID`：
+**何时需要 `NZ_UUID`**：
 
-- **全新部署**（GitHub 完全没备份）
-- **备份里没有 `config.yml`**（旧版本备份，或首次安装时未启用 agent），同时希望监控容器自己
+| 迁移场景 | 是否需要 `NZ_UUID` |
+|---|---|
+| 备份含 `config.yml` | ❌ 不需要 |
+| 备份**不含** `config.yml` + 想监控容器自己 | ✅ 需要 |
+| 备份**不含** `config.yml` + 不监控容器自己 | ❌ 不需要 |
+| 备份来自其他项目、结构不一样 | 视情况，见第六章 FAQ |
+
+## 十三、跨项目迁移的特殊情况
+
+不同项目/版本的备份结构可能不一致：
+
+| 结构 | 示例 | 来源 |
+|---|---|---|
+| 标准（当前） | `data/config.yaml` + `data/sqlite.db` + `config.yml` | 本项目新版本 |
+| 旧版（无 `data/`） | `config.yaml` + `sqlite.db` 直接在根 | 本项目早期版本 |
+| 面板目录布局 | `dashboard/data/config.yaml` | 其他封装项目 |
+| 全量打包 | `app/data/config.yaml` + `app/config.yml` | 自定义脚本 |
+
+`restore.sh` 已兼容：
+
+- 标准结构 `data/sqlite.db`
+- 旧版结构根目录 `sqlite.db`
+- 其他结构会自动跳过，**不破坏已有数据**
+
+如果结构非常规（如 `dashboard/data/`），可手动解压查看后调整，或参考本项目 `restore.sh` 里的 `find` 兜底逻辑做适配。
 
 ---
 
 # 第四部分 · 路径分流架构（参考）
 
-## 十三、流量分离核心思路
+## 十四、流量分离核心思路
 
 - **Agent gRPC 通信**（`/proto.NezhaService/*`）**继续走 Nginx**（`localhost:80`），由 Nginx 提供稳定的 HTTP/2 和 gRPC 代理支持。
 - **面板 HTTP/API 请求**（所有其他路径 `*`）**直连 Dashboard**（`localhost:8008`），不再经过 Nginx 反代，避免 Nginx 对长连接（WebSocket）或 gRPC 协议处理不当导致的间歇性 502。
 
-## 十四、方案 A：共用同一个域名（推荐）
+## 十五、方案 A：共用同一个域名（推荐）
 
 Cloudflare Tunnel 配**一个 Subdomain**，拆两条路径规则：
 
@@ -341,7 +375,7 @@ Cloudflare Tunnel 配**一个 Subdomain**，拆两条路径规则：
 
 > **规则顺序很重要**：`/proto.NezhaService/*` 必须排在 `*` 之前，Cloudflare 按顺序匹配，命中即停止。
 
-## 十五、方案 B：SaaS 自定义主机名
+## 十六、方案 B：SaaS 自定义主机名
 
 Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare for SaaS 自定义主机名**（CNAME 到回退源）访问。
 
@@ -408,7 +442,7 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 
 > **加一个域名 = SaaS 加一条 + Tunnel 加一条。**
 
-## 十六、Cloudflare 侧必须开启 gRPC + WebSockets
+## 十七、Cloudflare 侧必须开启 gRPC + WebSockets
 
 进入 **Cloudflare 仪表盘** → 选中回退源域名（如 `nezha.nyc.mn`）→ 左侧菜单 **网络** → 打开以下两个开关：
 
@@ -447,7 +481,8 @@ Cloudflare Tunnel 作为**回退源**，所有面板域名通过 **Cloudflare fo
 |---|---|
 | **首次安装后 GitHub 仓库没出现备份** | 检查 4 个 GitHub 环境变量、`ZIP_PASSWORD` 是否正确，以及 Token 是否有 `repo` 权限；也可手动把 README 改为 `backup` 重试 |
 | **首次备份失败导致重启后 agent 全部失联** | 说明 `agent_secret_key` 没被保存。重启后面板生成新的 secret，需要重新添加 agent；先手动触发备份再重启 |
-| **备份里没有 `config.yml`，agent 没启动** | 说明备份是旧版本或首次安装未启用 agent。若想监控容器自己，**需要设置 `NZ_UUID`**，脚本会从恢复的 `data/config.yaml` 读 `agent_secret_key` 重新生成 `config.yml` |
+| **备份里没有 `config.yml`，agent 没启动** | 说明备份是旧版本或其他项目生成。若想监控容器自己，**设置 `NZ_UUID`** 即可，脚本会从恢复的 `data/config.yaml` 读 `agent_secret_key` 重新生成 `config.yml` |
+| **跨项目迁移，备份结构不一样** | 本项目支持标准结构（`data/sqlite.db`）和旧版结构（根目录 `sqlite.db`）；其他结构会自动跳过且不破坏数据。可手动解压查看结构后适配 |
 | 面板打开但探针离线 | **Cloudflare 未开启 gRPC**：Cloudflare 控制台 → 选择域名（如 `nezha.nyc.mn`）→ 网络 → 打开 gRPC 开关 |
 | 面板打开但终端/文件管理连不上 | **Cloudflare 未开启 WebSockets**：同上位置，打开 WebSockets 开关 |
 | 面板打开但 agent 离线 | 检查 `config.yml` 里的 `client_secret` 是否与 `data/config.yaml` 的 `agent_secret_key` 一致 |
