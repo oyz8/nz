@@ -1,4 +1,4 @@
-name: 🐳 构建 Docker 平台哪吒镜像
+name: 🐳 构建 Docker 平台哪吒镜像（docker 分支）
 
 on:
   workflow_dispatch:
