@@ -236,7 +236,7 @@ main()
 data-2026-09-18-02-30-00.zip
 ├── config.yml              ← agent 配置（含 client_secret + uuid）
 └── data/
-    ├── config.yaml         ← 面板配置（含 agent_secret_key）
+    ├── config.yaml         ← 面板配置（含 client_secret）
     └── sqlite.db           ← 面板数据库
 ```
 
