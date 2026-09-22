@@ -24,6 +24,18 @@ jobs:
       packages: write
 
     steps:
+      - name: 检查分支是否存在
+        id: check_docker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/branches/docker" >/dev/null 2>&1; then
+            echo "✅ 检测到 docker 分支：${{ github.repository }}"
+          else
+            echo "::error title=缺少分支::缺少分支，请重新 Fork 项目，勾选所有分支。"
+            exit 1
+          fi
+
       - name: 拉取 docker 分支代码
         uses: actions/checkout@v4
         with:
@@ -46,8 +58,8 @@ jobs:
           TAG="${{ inputs.image_tag }}"
           [ -z "$NAME" ] && NAME="argo-nezha"
           [ -z "$TAG" ]  && TAG="latest"
-          echo "name=$NAME" >> $GITHUB_OUTPUT
-          echo "tag=$TAG"   >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
           echo "构建: ghcr.io/${{ github.repository_owner }}/$NAME:$TAG"
 
       - name: 构建并推送
