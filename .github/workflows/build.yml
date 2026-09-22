@@ -24,7 +24,7 @@ jobs:
       packages: write
 
     steps:
-      - name: 检查分支是否存在
+      - name: 检查 docker 分支是否存在
         id: check_docker
         env:
           GH_TOKEN: ${{ github.token }}
